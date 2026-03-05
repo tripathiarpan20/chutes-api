@@ -1935,7 +1935,7 @@ async def invoke(
 
                 if error_message == "BAD_REQUEST":
                     logger.warning(
-                        f"instance_id={target.instance_id} [chute_id={target.chute_id}]: bad request {error_detail}"
+                        f"instance_id={target.instance_id} [chute_id={target.chute_id}]: bad request"
                     )
                     yield sse(
                         {"error": "bad_request", "detail": f"Invalid request: {error_detail}"}
