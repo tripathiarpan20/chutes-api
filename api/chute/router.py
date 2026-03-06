@@ -39,7 +39,7 @@ from api.chute.templates import (
     build_vllm_code,
     build_diffusion_code,
 )
-from api.gpu import ALLOW_INCLUDE, SUPPORTED_GPUS, MAX_GPU_PRICE_DELTA
+from api.gpu import SUPPORTED_GPUS, MAX_GPU_PRICE_DELTA
 from api.chute.response import ChuteResponse
 from api.chute.util import (
     selector_hourly_price,
@@ -1118,15 +1118,6 @@ async def _deploy_chute(
         chute_args.node_selector = {"gpu_count": 1}
     if isinstance(chute_args.node_selector, dict):
         chute_args.node_selector = NodeSelector(**chute_args.node_selector)
-    for gpu in chute_args.node_selector.include or []:
-        if gpu not in ALLOW_INCLUDE:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"Only these GPUs can be explicitly required in the `include` field: {ALLOW_INCLUDE}"
-                    "\nPlease remove the include field or update the list to be an allowed GPU"
-                ),
-            )
     if len(chute_args.node_selector.exclude or []) > 5:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
