@@ -1586,10 +1586,6 @@ async def invoke(
                         # Log cache hit info.
                         if cached_tokens > 0 and prompt_tokens > 0:
                             cache_hit_rate = round(cached_tokens / prompt_tokens * 100, 1)
-                            logger.info(
-                                f"Cache hit: model={chute.name}:{chute.chute_id} prompt_tokens={prompt_tokens} user={user.user_id} "
-                                f"cached_tokens={cached_tokens} hit_rate={cache_hit_rate}% discount={cache_discount}"
-                            )
 
                     elif (
                         price_override := await PriceOverride.get(user_id, chute.chute_id)
