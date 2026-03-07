@@ -570,15 +570,18 @@ async def _invoke(
                         yield result_val
 
             except Exception as e:
-                logger.error(f"Failed here: {e}\n{traceback.format_exc()}")
                 if not first_chunk_processed:
                     if isinstance(e, HTTPException):
                         raise e
                     else:
+                        logger.error(f"Unhandled exception during processing: {str(e)}")
                         raise HTTPException(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
                         )
                 else:
+                    logger.error(
+                        f"Unhandled exception during processing after first chunk already yielded: {str(e)}"
+                    )
                     yield json.dumps(
                         {
                             "error": f"Unhandled exception during response stream: {e}",
