@@ -1958,39 +1958,47 @@ async def claim_graval_launch_config(
 
 async def delayed_instance_tls_check(instance_id: str):
     """Verify the chute port serves the expected TLS cert after activation."""
-    await asyncio.sleep(10)  # Wait for uvicorn to be listening.
-
-    async with get_session() as session:
-        instance = (
-            (await session.execute(select(Instance).where(Instance.instance_id == instance_id)))
-            .unique()
-            .scalar_one_or_none()
-        )
-        if not instance or not instance.active:
-            return
-        if not instance.cacert:
-            return
-        live_ok = await _verify_instance_tls_live(instance.host, instance.port, instance.cacert)
-        if not live_ok:
-            reason = (
-                f"Live TLS cert verification failed: "
-                f"{instance.instance_id=} {instance.miner_hotkey=} {instance.chute_id=}"
+    for attempt in range(4):
+        await asyncio.sleep(7)
+        async with get_session() as session:
+            instance = (
+                (await session.execute(select(Instance).where(Instance.instance_id == instance_id)))
+                .unique()
+                .scalar_one_or_none()
             )
-            logger.error(reason)
-            await session.delete(instance)
-            await session.execute(
-                text(
-                    "UPDATE instance_audit SET deletion_reason = :reason WHERE instance_id = :instance_id"
-                ),
-                {"instance_id": instance.instance_id, "reason": reason},
-            )
-            await session.commit()
-            await invalidate_instance_cache(instance.chute_id, instance_id=instance.instance_id)
-            asyncio.create_task(notify_deleted(instance))
-        else:
-            logger.success(
-                f"Live TLS cert verification passed: {instance.instance_id=} on {instance.host}:{instance.port}"
-            )
+            if not instance or not instance.active:
+                return
+            if not instance.cacert:
+                return
+            live_ok = await _verify_instance_tls_live(instance.host, instance.port, instance.cacert)
+            if not live_ok:
+                reason = (
+                    "Live TLS cert verification failed: "
+                    f"{instance.instance_id=} {instance.miner_hotkey=} {instance.chute_id=} (attempt {attempt + 1} of 4)"
+                )
+                if attempt == 3:
+                    logger.error(reason)
+                    await session.delete(instance)
+                    await session.execute(
+                        text(
+                            "UPDATE instance_audit SET deletion_reason = :reason WHERE instance_id = :instance_id"
+                        ),
+                        {"instance_id": instance.instance_id, "reason": reason},
+                    )
+                    await session.commit()
+                    await invalidate_instance_cache(
+                        instance.chute_id, instance_id=instance.instance_id
+                    )
+                    asyncio.create_task(notify_deleted(instance))
+                else:
+                    logger.warning(reason)
+            else:
+                logger.success(
+                    f"Live TLS cert verification passed: {instance.instance_id=} on {instance.host}:{instance.port}"
+                )
+                await invalidate_instance_cache(instance.chute_id, instance_id=instance.instance_id)
+                asyncio.create_task(notify_activated(instance))
+                return
 
 
 async def delayed_instance_fs_check(instance_id: str):
@@ -2175,11 +2183,12 @@ async def activate_launch_config_instance(
                 seconds=chute.shutdown_after_seconds or 300
             )
         await db.commit()
-        await invalidate_instance_cache(instance.chute_id, instance_id=instance.instance_id)
         await delete_bounty(chute.chute_id)
-        asyncio.create_task(notify_activated(instance))
         if instance.cacert:
             asyncio.create_task(delayed_instance_tls_check(instance.instance_id))
+        else:
+            await invalidate_instance_cache(instance.chute_id, instance_id=instance.instance_id)
+            asyncio.create_task(notify_activated(instance))
     return {"ok": True}
 
 
