@@ -143,7 +143,7 @@ class Settings(BaseSettings):
 
     # Base redis settings.
     redis_host: str = Field(
-        default="172.16.0.100",
+        default_factory=lambda: os.getenv("HOST_IP", "172.16.0.100"),
         validation_alias="PRIMARY_REDIS_HOST",
     )
     redis_port: int = Field(
