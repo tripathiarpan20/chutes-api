@@ -163,7 +163,7 @@ class Settings(BaseSettings):
     _lite_redis_client: Optional[redis.Redis] = None
     _billing_redis_client: Optional[redis.Redis] = None
     _cm_redis_clients: Optional[list[redis.Redis]] = None
-    cm_redis_shard_count: int = int(os.getenv("CM_REDIS_SHARD_COUNT", "5"))
+    cm_redis_shard_count: int = int(os.getenv("CM_REDIS_SHARD_COUNT", "6"))
     cm_redis_start_port: int = int(os.getenv("CM_REDIS_START_PORT", "1700"))
     cm_redis_socket_timeout: float = float(os.getenv("CM_REDIS_SOCKET_TIMEOUT", "30.0"))
     cm_redis_op_timeout: float = float(os.getenv("CM_REDIS_OP_TIMEOUT", "2.5"))
