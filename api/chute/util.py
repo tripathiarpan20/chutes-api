@@ -1583,10 +1583,6 @@ async def invoke(
                         )
                         override_applied = True
 
-                        # Log cache hit info.
-                        if cached_tokens > 0 and prompt_tokens > 0:
-                            cache_hit_rate = round(cached_tokens / prompt_tokens * 100, 1)
-
                     elif (
                         price_override := await PriceOverride.get(user_id, chute.chute_id)
                     ) is not None:

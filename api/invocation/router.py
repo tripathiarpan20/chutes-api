@@ -12,7 +12,6 @@ import csv
 import uuid
 import time
 import decimal
-import traceback
 from loguru import logger
 from pydantic import BaseModel, ValidationError, Field
 from datetime import date, datetime
