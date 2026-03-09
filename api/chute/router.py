@@ -1223,15 +1223,14 @@ async def _deploy_chute(
     if "affine" in chute_args.name.lower():
         if (
             not image_supports_cllmv(
-                image, min_sglang_version=2025111902, min_vllm_version=2026011303
+                image, min_sglang_version=2026030900, min_vllm_version=2026030900
             )
             or image.user_id != await chutes_user_id()
-            or semcomp(image.chutes_version, "0.5.15") < 0
-            or image.tag.endswith(".tnightly")
+            or semcomp(image.chutes_version, "0.5.28") < 0
         ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail='Must use "sglang" or "vllm" image with chutes lib version >= 0.5.15, and NOT a .tnightly (transformers nightly) tag',
+                detail='Must use "sglang" or "vllm" image with chutes lib version >= 0.5.28',
             )
 
     # Prevent deploying images with old chutes SDK versions.
