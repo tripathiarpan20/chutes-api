@@ -135,6 +135,10 @@ INTEGRATED_SUBNETS = {
         "netuid": 44,
         "model_substring": "turbovision",
     },
+    "vocence": {
+        "netuid": 102,
+        "model_substring": "vocence",
+    },
 }
 
 # Chute utilization query.
