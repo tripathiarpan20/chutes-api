@@ -802,6 +802,8 @@ async def hostname_invocation(
             payload["model"] = "XiaomiMiMo/MiMo-V2-Flash-TEE"
         elif model == "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF1":
             payload["model"] = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-TEE"
+        elif model == "tngtech/DeepSeek-TNG-R1T2-Chimera":
+            payload["model"] = "tngtech/DeepSeek-TNG-R1T2-Chimera-TEE"
 
         # No file support currently.
         if isinstance(payload.get("messages"), list):
