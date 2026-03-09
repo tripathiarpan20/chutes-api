@@ -40,6 +40,7 @@ from api.util import (
     encrypt_instance_request,
     decrypt_instance_response,
     has_legacy_private_billing,
+    semcomp,
 )
 from api.miner_client import sign_request
 from api.rate_limit import rate_limit
@@ -221,6 +222,21 @@ async def e2e_invoke(
             detail="This chute is currently disabled.",
         )
 
+    # Block non-streaming E2E for vLLM chutes on old library versions that
+    # can't send usage data, to prevent incorrect per-second billing.
+    if (
+        not is_stream
+        and chute.standard_template == "vllm"
+        and semcomp(instance.chutes_version or "0.0.0", "0.5.27") < 0
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Non-streaming E2E requests require chutes >= 0.5.27 for vLLM chutes. "
+                "Please use stream=True until the chute has been upgraded."
+            ),
+        )
+
     resolve_rate_limit_headers(request, current_user, chute)
     await check_quota_and_balance(request, current_user, chute)
 
@@ -345,10 +361,26 @@ async def e2e_invoke(
             )
         else:
             # Non-streaming: read full response, transport-decrypt, relay.
+            import base64 as _b64
+
             raw_body = response.content
             decrypted = await asyncio.to_thread(decrypt_instance_response, raw_body, instance)
 
-            # Time-based billing.
+            # chutes >= 0.5.27 sends a JSON envelope with E2E blob + plaintext usage
+            # so the API can bill based on token counts instead of per-second.
+            metrics = None
+            e2e_blob = decrypted
+            if semcomp(instance.chutes_version or "0.0.0", "0.5.27") >= 0:
+                envelope = json.loads(decrypted)
+                e2e_blob = _b64.b64decode(envelope["e2e"])
+                usage = envelope.get("usage")
+                if usage and isinstance(usage, dict):
+                    metrics = {
+                        "it": usage.get("prompt_tokens", 0),
+                        "ot": usage.get("completion_tokens", 0),
+                        "ct": (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
+                    }
+
             duration = time.time() - started_at
             compute_units = multiplier * math.ceil(duration)
             await _do_billing(
@@ -358,7 +390,7 @@ async def e2e_invoke(
                 duration,
                 compute_units,
                 multiplier,
-                None,
+                metrics,
                 invocation_id,
                 parent_invocation_id,
                 request,
@@ -372,7 +404,7 @@ async def e2e_invoke(
             asyncio.create_task(clear_instance_disable_state(instance.instance_id))
 
             return Response(
-                content=decrypted,
+                content=e2e_blob,
                 media_type="application/octet-stream",
                 headers=build_response_headers(request),
             )
