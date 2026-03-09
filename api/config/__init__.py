@@ -317,6 +317,12 @@ class Settings(BaseSettings):
     # Reroll discount (i.e. duplicate prompts for re-roll in RP, or pass@k, etc.)
     reroll_multiplier: float = float(os.getenv("REROLL_MULTIPLIER", "0.1"))
 
+    # Magic discount header: when a request includes this header with the correct value,
+    # a discount is applied to both quota increment and paygo charges.
+    magic_discount_header_key: Optional[str] = os.getenv("MAGIC_DISCOUNT_HEADER_KEY")
+    magic_discount_header_val: Optional[str] = os.getenv("MAGIC_DISCOUNT_HEADER_VAL")
+    magic_discount_amount: float = float(os.getenv("MAGIC_DISCOUNT_AMOUNT", "0.5"))
+
     # Chutes pinned version.
     chutes_version: str = os.getenv("CHUTES_VERSION", "0.4.46")
 

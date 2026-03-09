@@ -1683,6 +1683,18 @@ async def invoke(
                 if balance_used and sub_paygo_discount and not override_applied:
                     balance_used -= balance_used * sub_paygo_discount
 
+                # Magic discount: configurable discount when the configured header is present.
+                magic_discount = False
+                if (
+                    settings.magic_discount_header_key
+                    and settings.magic_discount_header_val
+                    and request.headers.get(settings.magic_discount_header_key)
+                    == settings.magic_discount_header_val
+                ):
+                    magic_discount = True
+                    if balance_used:
+                        balance_used *= 1.0 - settings.magic_discount_amount
+
                 # Don't charge for private instances.
                 if (
                     not chute.public
@@ -1769,6 +1781,8 @@ async def invoke(
                     )
                 ):
                     value = 1.0 if not reroll else settings.reroll_multiplier
+                    if magic_discount:
+                        value *= 1.0 - settings.magic_discount_amount
                     key = await InvocationQuota.quota_key(user.user_id, chute.chute_id)
                     asyncio.create_task(settings.redis_client.incrbyfloat(key, value))
 
