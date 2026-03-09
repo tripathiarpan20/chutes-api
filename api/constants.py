@@ -131,6 +131,10 @@ INTEGRATED_SUBNETS = {
         "netuid": 59,
         "model_substring": "babelbit",
     },
+    "leoma": {
+        "netuid": 99,
+        "model_substring": "leoma",
+    },
     "score": {
         "netuid": 44,
         "model_substring": "turbovision",
