@@ -222,10 +222,11 @@ STARVING_HISTORY_KEY_PREFIX = "starving:"
 LIMIT_OVERRIDES = {}
 FAILSAFE = {
     "0d7184a2-32a3-53e0-9607-058c37edaab5": 70,
-    "2ff25e81-4586-5ec8-b892-3a6f342693d7": 10,
     "e51e818e-fa63-570d-9f68-49d7d1b4d12f": 10,
     "08a7a60f-6956-5a9e-9983-5603c3ac5a38": 10,
-    "8f3bb827-b9e6-5487-88bc-ee8f0c6f5810": 10,
+    "2ff25e81-4586-5ec8-b892-3a6f342693d7": 7,
+    "8f3bb827-b9e6-5487-88bc-ee8f0c6f5810": 4,
+    "51a4284a-a5a0-5e44-a9cc-6af5a2abfbcf": 4,
     "6320ab82-9e94-5d63-8e38-d136f61dc157": 3,
 }
 
