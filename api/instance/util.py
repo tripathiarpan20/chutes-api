@@ -461,6 +461,14 @@ class LeastConnManager:
             return []
         min_count = min(counts.values())
 
+        # If every instance is already at or above concurrency, short-circuit.
+        if min_count >= self.concurrency:
+            logger.warning(
+                f"All instances at capacity for {self.chute_id}: "
+                f"min_count={min_count} >= concurrency={self.concurrency}"
+            )
+            return None
+
         # Update mean count for monitoring
         if not avoid:
             self.mean_count = int(sum(counts.values()) / (len(counts) or 1))
@@ -574,6 +582,16 @@ class LeastConnManager:
                 return
 
             key = f"cc:{self.chute_id}:{instance.instance_id}"
+
+            # Check if already at capacity before routing.
+            try:
+                current = await self.redis_client.client.get(key)
+                if current is not None and int(current) >= self.concurrency:
+                    yield None, "infra_overload"
+                    return
+            except Exception as e:
+                logger.error(f"Error checking connection count: {e}")
+
             try:
                 pipe = self.redis_client.client.pipeline()
                 pipe.incr(key)
@@ -609,6 +627,10 @@ class LeastConnManager:
             targets = await asyncio.wait_for(
                 self.get_targets(avoid=avoid, prefixes=prefixes), timeout=7.0
             )
+            if targets is None:
+                # All instances at capacity (min connections >= concurrency).
+                yield None, "infra_overload"
+                return
             if not targets:
                 yield None, "No infrastructure available to serve request"
                 return

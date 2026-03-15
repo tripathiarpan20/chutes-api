@@ -1487,6 +1487,8 @@ async def invoke(
 
             if not target:
                 if infra_overload or error_message == "infra_overload":
+                    if not infra_overload:
+                        track_request_rate_limited(chute.chute_id)
                     logger.warning(f"All miners are at max capacity: {chute.name=}")
                     yield sse(
                         {
