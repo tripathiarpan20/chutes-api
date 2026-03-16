@@ -2162,6 +2162,7 @@ async def get_and_store_llm_details(chute_id: str):
                 model_info["chute_id"] = chute.chute_id
                 model_info["price"] = price
                 model_info["confidential_compute"] = chute.tee
+                model_info["premium"] = chute.chute_id in settings.premium_chute_ids
 
                 # OpenRouter format.
                 model_info["pricing"] = {
