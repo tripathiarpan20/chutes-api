@@ -310,7 +310,7 @@ class Settings(BaseSettings):
         return self._launch_config_private_key
 
     # Default quotas/discounts.
-    default_quotas: dict = json.loads(os.getenv("DEFAULT_QUOTAS", '{"*": 200}'))
+    default_quotas: dict = json.loads(os.getenv("DEFAULT_QUOTAS", '{"*": 0}'))
     default_discounts: dict = json.loads(os.getenv("DEFAULT_DISCOUNTS", '{"*": 0.0}'))
     default_job_quotas: dict = json.loads(os.getenv("DEFAULT_JOB_QUOTAS", '{"*": 0}'))
 
