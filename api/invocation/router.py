@@ -161,8 +161,7 @@ async def get_llm_stats(
             rv = [r for r in rv if r["date"] <= end_str]
         return rv
     # usage_data is the source of truth for token counts on/after this date.
-    USAGE_DATA_CUTOFF = date(2025, 3, 25)
-    USAGE_DATA_CUTOFF_STR = "2025-03-25"
+    USAGE_DATA_CUTOFF = "2025-03-25"
 
     usage_query = text("""
         WITH daily_usage AS (
@@ -228,7 +227,7 @@ async def get_llm_stats(
             row_date = str(row["date"])
             key = (row["chute_id"], row_date)
 
-            if row_date < USAGE_DATA_CUTOFF_STR:
+            if row_date < USAGE_DATA_CUTOFF:
                 # Backfill: use vllm_metrics as the source for pre-cutoff data.
                 if key not in by_key:
                     cid = row["chute_id"]
