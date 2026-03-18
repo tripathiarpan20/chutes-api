@@ -31,7 +31,7 @@ from api.chute.util import (
 )
 from api.util import recreate_vlm_payload
 from api.user.schemas import User
-from api.user.service import get_current_user, subnet_role_accessible
+from api.user.service import chutes_user_id, get_current_user, subnet_role_accessible
 from api.report.schemas import Report, ReportArgs
 from api.database import get_db_session, get_session, get_inv_session, get_db_ro_session
 from api.instance.util import get_chute_target_manager
@@ -45,6 +45,9 @@ from api.util import validate_tool_call_arguments
 
 router = APIRouter()
 host_invocation_router = APIRouter()
+
+# Date when usage_data table started being populated.
+USAGE_DATA_CUTOFF = date(2025, 8, 25)
 
 
 class DiffusionInput(BaseModel):
@@ -160,6 +163,15 @@ async def get_llm_stats(
             end_str = str(end_date)
             rv = [r for r in rv if r["date"] <= end_str]
         return rv
+    system_uid = await chutes_user_id()
+
+    # Build name map: only system-user-owned chutes get names, rest are [private].
+    name_query = text("""
+        SELECT DISTINCT ON (chute_id) chute_id, COALESCE(name, '[unknown]') AS name
+        FROM chute_history
+        WHERE user_id = :system_uid
+        ORDER BY chute_id, created_at DESC
+    """)
     usage_query = text("""
         WITH daily_usage AS (
             SELECT chute_id, bucket::date AS date,
@@ -169,29 +181,22 @@ async def get_llm_stats(
             FROM usage_data
             WHERE bucket >= :cutoff
             GROUP BY chute_id, date
-        ), latest_chute_names AS (
-            SELECT DISTINCT ON (chute_id) chute_id, COALESCE(name, '[unknown]') AS name
-            FROM chute_history
-            ORDER BY chute_id, created_at DESC
         )
-        SELECT d.chute_id,
-            CASE WHEN c.user_id = 'dff3e6bb-3a6b-5a2b-9c48-da3abcd5ca5f'
-                THEN COALESCE(n.name, '[unknown]')
-                ELSE '[private]'
-            END AS name,
-            d.date, d.total_requests, d.total_input_tokens, d.total_output_tokens
-        FROM daily_usage d
-        LEFT JOIN latest_chute_names n ON d.chute_id = n.chute_id
-        LEFT JOIN chutes c ON d.chute_id = c.chute_id
+        SELECT chute_id, date, total_requests, total_input_tokens, total_output_tokens
+        FROM daily_usage
     """)
+
     async with get_session() as session:
-        result = await session.execute(usage_query, {"cutoff": date(2025, 8, 25)})
+        name_result = await session.execute(name_query, {"system_uid": system_uid})
+        name_map = {row.chute_id: row.name for row in name_result}
+
+        result = await session.execute(usage_query, {"cutoff": USAGE_DATA_CUTOFF})
         by_key = {}
         for row in result:
             key = (row.chute_id, str(row.date))
             by_key[key] = {
                 "chute_id": row.chute_id,
-                "name": row.name,
+                "name": name_map.get(row.chute_id, "[private]"),
                 "date": row.date,
                 "total_requests": int(row.total_requests),
                 "total_input_tokens": int(row.total_input_tokens or 0),
@@ -200,14 +205,32 @@ async def get_llm_stats(
                 "average_ttft": 0,
             }
 
-    # Merge in tps/ttft from invocations-derived metrics.
+    # Merge in tps/ttft from invocations-derived metrics, and backfill
+    # token data for dates before usage_data cutoff.
     async with get_inv_session() as session:
         result = await session.execute(text("SELECT * FROM vllm_metrics"))
         for row in result.mappings():
             key = (row["chute_id"], str(row["date"]))
+            row_date = (
+                row["date"]
+                if isinstance(row["date"], date)
+                else date.fromisoformat(str(row["date"]))
+            )
             if key in by_key:
                 by_key[key]["average_tps"] = float(row.get("average_tps") or 0)
                 by_key[key]["average_ttft"] = float(row.get("average_ttft") or 0)
+            elif row_date < USAGE_DATA_CUTOFF:
+                cid = row["chute_id"]
+                by_key[key] = {
+                    "chute_id": cid,
+                    "name": name_map.get(cid, "[private]"),
+                    "date": row_date,
+                    "total_requests": int(row.get("total_requests") or 0),
+                    "total_input_tokens": int(row.get("total_input_tokens") or 0),
+                    "total_output_tokens": int(row.get("total_output_tokens") or 0),
+                    "average_tps": float(row.get("average_tps") or 0),
+                    "average_ttft": float(row.get("average_ttft") or 0),
+                }
 
     rv = sorted(
         by_key.values(),
