@@ -47,7 +47,7 @@ router = APIRouter()
 host_invocation_router = APIRouter()
 
 # Date when usage_data table started being populated.
-USAGE_DATA_CUTOFF = date(2025, 8, 25)
+USAGE_DATA_CUTOFF = date(2025, 8, 26)
 
 
 class DiffusionInput(BaseModel):
