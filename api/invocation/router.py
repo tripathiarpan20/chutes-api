@@ -140,8 +140,63 @@ async def _cached_get_metrics(table, cache_key):
 
 
 @router.get("/stats/llm")
-async def get_llm_stats():
-    return await _cached_get_metrics("vllm_metrics", b"llmstats")
+async def get_llm_stats(request: Request = None):
+    cache_key = b"llmstats"
+    if request:
+        if (cached := await settings.redis_client.get(cache_key)) is not None:
+            return json.loads(gzip.decompress(base64.b64decode(cached)))
+        return []
+    usage_query = text("""
+        WITH daily_usage AS (
+            SELECT chute_id, bucket::date AS date,
+                SUM(count) AS total_requests,
+                SUM(input_tokens) AS total_input_tokens,
+                SUM(output_tokens) AS total_output_tokens
+            FROM usage_data
+            GROUP BY chute_id, date
+        ), latest_chute_names AS (
+            SELECT DISTINCT ON (chute_id) chute_id, COALESCE(name, '[unknown]') AS name
+            FROM chute_history
+            ORDER BY chute_id, created_at DESC
+        )
+        SELECT d.chute_id, COALESCE(n.name, '[unknown]') AS name, d.date,
+            d.total_requests, d.total_input_tokens, d.total_output_tokens
+        FROM daily_usage d
+        LEFT JOIN latest_chute_names n ON d.chute_id = n.chute_id
+    """)
+    async with get_session() as session:
+        result = await session.execute(usage_query)
+        by_key = {}
+        for row in result:
+            key = (row.chute_id, str(row.date))
+            by_key[key] = {
+                "chute_id": row.chute_id,
+                "name": row.name,
+                "date": row.date,
+                "total_requests": int(row.total_requests),
+                "total_input_tokens": int(row.total_input_tokens or 0),
+                "total_output_tokens": int(row.total_output_tokens or 0),
+                "average_tps": 0,
+                "average_ttft": 0,
+            }
+
+    # Merge in tps/ttft from invocations-derived metrics.
+    async with get_inv_session() as session:
+        result = await session.execute(text("SELECT * FROM vllm_metrics"))
+        for row in result.mappings():
+            key = (row["chute_id"], str(row["date"]))
+            if key in by_key:
+                by_key[key]["average_tps"] = float(row.get("average_tps") or 0)
+                by_key[key]["average_ttft"] = float(row.get("average_ttft") or 0)
+
+    rv = sorted(
+        by_key.values(),
+        key=lambda r: (r["date"], r["total_input_tokens"] + r["total_output_tokens"]),
+        reverse=True,
+    )
+    cache_value = base64.b64encode(gzip.compress(json.dumps(rv)))
+    await settings.redis_client.set(cache_key, cache_value)
+    return rv
 
 
 @router.get("/stats/diffusion")
