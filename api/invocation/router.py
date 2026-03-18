@@ -247,128 +247,129 @@ async def get_diffusion_stats():
     return await _cached_get_metrics("diffusion_metrics", b"diffstats")
 
 
-@router.get("/exports/{year}/{month}/{day}/{hour_format}")
-async def get_export(
-    year: int,
-    month: int,
-    day: int,
-    hour_format: str,
-) -> Response:
-    """
-    Get invocation exports (and reports) for a particular hour.
-    """
-    format_match = re.match(r"^(\d+)((?:-(reports|jobs))?\.csv)$", hour_format)
-    if not format_match:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid format: {hour_format}"
-        )
-    hour = int(format_match.group(1))
-    suffix = format_match.group(2)
-
-    # Sanity check the dates.
-    valid = True
-    if (
-        (not 2024 <= year <= date.today().year)
-        or not (1 <= month <= 12)
-        or not (1 <= day <= 31)
-        or not (0 <= hour <= 23)
-    ):
-        valid = False
-    target_date = datetime(year, month, day, hour)
-    today = date.today()
-    current_hour = datetime.utcnow()
-    if (
-        target_date > datetime.utcnow()
-        or target_date < datetime(2024, 12, 14, 0)
-        or (target_date.date == today and hour == current_hour)
-    ):
-        valid = False
-    if not valid:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Invocations export not found {year=} {month=} {day=} {hour=}",
-        )
-
-    # Construct the S3 key based on whether this is a reports request
-    key = f"invocations/{year}/{month:02d}/{day:02d}/{hour:02d}{suffix}"
-
-    # Check if the file exists
-    exists = False
-    async with settings.s3_client() as s3:
-        try:
-            await s3.head_object(Bucket=settings.storage_bucket, Key=key)
-            exists = True
-        except Exception as exc:
-            if exc.response["Error"]["Code"] != "404":
-                raise
-
-    if not exists:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Invocations export not found {year=} {month=} {day=} {hour=}",
-        )
-
-    # Download and return the file.
-    data = BytesIO()
-    async with settings.s3_client() as s3:
-        await s3.download_fileobj(settings.storage_bucket, key, data)
-    filename = key.replace("invocations/", "").replace("/", "-")
-    return Response(
-        content=data.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@router.get("/exports/recent")
-async def get_recent_export(
-    hotkey: Optional[str] = None,
-    limit: Optional[int] = 100,
-    db: AsyncSession = Depends(get_db_ro_session),
-):
-    """
-    Get an export for recent data, which may not yet be in S3.
-    """
-    query = """
-        SELECT
-            invocation_id,
-            chute_id,
-            chute_user_id,
-            function_name,
-            image_id,
-            image_user_id,
-            instance_id,
-            miner_uid,
-            miner_hotkey,
-            started_at,
-            completed_at,
-            error_message,
-            compute_multiplier,
-            metrics
-        FROM partitioned_invocations
-        WHERE started_at >= CURRENT_TIMESTAMP - INTERVAL '1 day'
-        AND completed_at IS NOT NULL
-        AND error_message IS NULL
-    """
-    if not limit or limit <= 0:
-        limit = 100
-    limit = min(limit, 10000)
-    params = {"limit": limit}
-    if hotkey:
-        query += " AND miner_hotkey = :hotkey"
-        params["hotkey"] = hotkey
-    query += " ORDER BY started_at DESC LIMIT :limit"
-    output = StringIO()
-    writer = csv.writer(output)
-    result = await db.execute(text(query), params)
-    writer.writerow([col for col in result.keys()])
-    rows = result.fetchall()
-    await asyncio.to_thread(writer.writerows, rows)
-    return Response(
-        content=output.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="recent.csv"'},
-    )
+# XXX - remove raw invocation data since auditor no longer uses it (by default).
+# @router.get("/exports/{year}/{month}/{day}/{hour_format}")
+# async def get_export(
+#    year: int,
+#    month: int,
+#    day: int,
+#    hour_format: str,
+# ) -> Response:
+#    """
+#    Get invocation exports (and reports) for a particular hour.
+#    """
+#    format_match = re.match(r"^(\d+)((?:-(reports|jobs))?\.csv)$", hour_format)
+#    if not format_match:
+#        raise HTTPException(
+#            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid format: {hour_format}"
+#        )
+#    hour = int(format_match.group(1))
+#    suffix = format_match.group(2)
+#
+#    # Sanity check the dates.
+#    valid = True
+#    if (
+#        (not 2024 <= year <= date.today().year)
+#        or not (1 <= month <= 12)
+#        or not (1 <= day <= 31)
+#        or not (0 <= hour <= 23)
+#    ):
+#        valid = False
+#    target_date = datetime(year, month, day, hour)
+#    today = date.today()
+#    current_hour = datetime.utcnow()
+#    if (
+#        target_date > datetime.utcnow()
+#        or target_date < datetime(2024, 12, 14, 0)
+#        or (target_date.date == today and hour == current_hour)
+#    ):
+#        valid = False
+#    if not valid:
+#        raise HTTPException(
+#            status_code=status.HTTP_404_NOT_FOUND,
+#            detail=f"Invocations export not found {year=} {month=} {day=} {hour=}",
+#        )
+#
+#    # Construct the S3 key based on whether this is a reports request
+#    key = f"invocations/{year}/{month:02d}/{day:02d}/{hour:02d}{suffix}"
+#
+#    # Check if the file exists
+#    exists = False
+#    async with settings.s3_client() as s3:
+#        try:
+#            await s3.head_object(Bucket=settings.storage_bucket, Key=key)
+#            exists = True
+#        except Exception as exc:
+#            if exc.response["Error"]["Code"] != "404":
+#                raise
+#
+#    if not exists:
+#        raise HTTPException(
+#            status_code=status.HTTP_404_NOT_FOUND,
+#            detail=f"Invocations export not found {year=} {month=} {day=} {hour=}",
+#        )
+#
+#    # Download and return the file.
+#    data = BytesIO()
+#    async with settings.s3_client() as s3:
+#        await s3.download_fileobj(settings.storage_bucket, key, data)
+#    filename = key.replace("invocations/", "").replace("/", "-")
+#    return Response(
+#        content=data.getvalue(),
+#        media_type="text/csv",
+#        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+#    )
+#
+#
+# @router.get("/exports/recent")
+# async def get_recent_export(
+#    hotkey: Optional[str] = None,
+#    limit: Optional[int] = 100,
+#    db: AsyncSession = Depends(get_db_ro_session),
+# ):
+#    """
+#    Get an export for recent data, which may not yet be in S3.
+#    """
+#    query = """
+#        SELECT
+#            invocation_id,
+#            chute_id,
+#            chute_user_id,
+#            function_name,
+#            image_id,
+#            image_user_id,
+#            instance_id,
+#            miner_uid,
+#            miner_hotkey,
+#            started_at,
+#            completed_at,
+#            error_message,
+#            compute_multiplier,
+#            metrics
+#        FROM partitioned_invocations
+#        WHERE started_at >= CURRENT_TIMESTAMP - INTERVAL '1 day'
+#        AND completed_at IS NOT NULL
+#        AND error_message IS NULL
+#    """
+#    if not limit or limit <= 0:
+#        limit = 100
+#    limit = min(limit, 10000)
+#    params = {"limit": limit}
+#    if hotkey:
+#        query += " AND miner_hotkey = :hotkey"
+#        params["hotkey"] = hotkey
+#    query += " ORDER BY started_at DESC LIMIT :limit"
+#    output = StringIO()
+#    writer = csv.writer(output)
+#    result = await db.execute(text(query), params)
+#    writer.writerow([col for col in result.keys()])
+#    rows = result.fetchall()
+#    await asyncio.to_thread(writer.writerows, rows)
+#    return Response(
+#        content=output.getvalue(),
+#        media_type="text/csv",
+#        headers={"Content-Disposition": 'attachment; filename="recent.csv"'},
+#    )
 
 
 @router.post("/{invocation_id}/report")
