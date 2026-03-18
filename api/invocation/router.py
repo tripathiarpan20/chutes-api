@@ -140,12 +140,30 @@ async def _cached_get_metrics(table, cache_key):
 
 
 @router.get("/stats/llm")
-async def get_llm_stats(request: Request = None):
+async def get_llm_stats(
+    request: Request = None,
+    start_date: date = None,
+    end_date: date = None,
+    chute_id: str = None,
+):
     cache_key = b"llmstats"
     if request:
         if (cached := await settings.redis_client.get(cache_key)) is not None:
-            return json.loads(gzip.decompress(base64.b64decode(cached)))
-        return []
+            rv = json.loads(gzip.decompress(base64.b64decode(cached)))
+        else:
+            rv = []
+        if chute_id:
+            rv = [r for r in rv if r["chute_id"] == chute_id]
+        if start_date:
+            start_str = str(start_date)
+            rv = [r for r in rv if r["date"] >= start_str]
+        if end_date:
+            end_str = str(end_date)
+            rv = [r for r in rv if r["date"] <= end_str]
+        return rv
+    # usage_data is the source of truth for token counts on/after this date.
+    USAGE_DATA_CUTOFF = "2025-03-25"
+
     usage_query = text("""
         WITH daily_usage AS (
             SELECT chute_id, bucket::date AS date,
@@ -153,19 +171,25 @@ async def get_llm_stats(request: Request = None):
                 SUM(input_tokens) AS total_input_tokens,
                 SUM(output_tokens) AS total_output_tokens
             FROM usage_data
+            WHERE bucket >= :cutoff
             GROUP BY chute_id, date
         ), latest_chute_names AS (
             SELECT DISTINCT ON (chute_id) chute_id, COALESCE(name, '[unknown]') AS name
             FROM chute_history
             ORDER BY chute_id, created_at DESC
         )
-        SELECT d.chute_id, COALESCE(n.name, '[unknown]') AS name, d.date,
-            d.total_requests, d.total_input_tokens, d.total_output_tokens
+        SELECT d.chute_id,
+            CASE WHEN c.user_id = 'dff3e6bb-3a6b-5a2b-9c48-da3abcd5ca5f'
+                THEN COALESCE(n.name, '[unknown]')
+                ELSE '[private]'
+            END AS name,
+            d.date, d.total_requests, d.total_input_tokens, d.total_output_tokens
         FROM daily_usage d
         LEFT JOIN latest_chute_names n ON d.chute_id = n.chute_id
+        LEFT JOIN chutes c ON d.chute_id = c.chute_id
     """)
     async with get_session() as session:
-        result = await session.execute(usage_query)
+        result = await session.execute(usage_query, {"cutoff": USAGE_DATA_CUTOFF})
         by_key = {}
         for row in result:
             key = (row.chute_id, str(row.date))
@@ -180,12 +204,51 @@ async def get_llm_stats(request: Request = None):
                 "average_ttft": 0,
             }
 
-    # Merge in tps/ttft from invocations-derived metrics.
+        # Build a chute_id -> user_id lookup for [private] logic on backfill rows.
+        chute_owners = await session.execute(text("SELECT chute_id, user_id FROM chutes"))
+        owner_map = {row.chute_id: row.user_id for row in chute_owners}
+
+        # Build a chute_id -> name lookup for backfill rows.
+        chute_names_result = await session.execute(
+            text("""
+            SELECT DISTINCT ON (chute_id) chute_id, COALESCE(name, '[unknown]') AS name
+            FROM chute_history
+            ORDER BY chute_id, created_at DESC
+        """)
+        )
+        name_map = {row.chute_id: row.name for row in chute_names_result}
+
+    SYSTEM_USER = "dff3e6bb-3a6b-5a2b-9c48-da3abcd5ca5f"
+
+    # Merge vllm_metrics: backfill token data for dates before cutoff,
+    # merge tps/ttft for all dates.
     async with get_inv_session() as session:
         result = await session.execute(text("SELECT * FROM vllm_metrics"))
         for row in result.mappings():
-            key = (row["chute_id"], str(row["date"]))
-            if key in by_key:
+            row_date = str(row["date"])
+            key = (row["chute_id"], row_date)
+
+            if row_date < USAGE_DATA_CUTOFF:
+                # Backfill: use vllm_metrics as the source for pre-cutoff data.
+                if key not in by_key:
+                    cid = row["chute_id"]
+                    owner = owner_map.get(cid)
+                    name = name_map.get(cid, "[unknown]") if owner == SYSTEM_USER else "[private]"
+                    by_key[key] = {
+                        "chute_id": cid,
+                        "name": name,
+                        "date": row["date"],
+                        "total_requests": int(row.get("total_requests") or 0),
+                        "total_input_tokens": int(row.get("total_input_tokens") or 0),
+                        "total_output_tokens": int(row.get("total_output_tokens") or 0),
+                        "average_tps": float(row.get("average_tps") or 0),
+                        "average_ttft": float(row.get("average_ttft") or 0),
+                    }
+                else:
+                    by_key[key]["average_tps"] = float(row.get("average_tps") or 0)
+                    by_key[key]["average_ttft"] = float(row.get("average_ttft") or 0)
+            elif key in by_key:
+                # Post-cutoff: only merge tps/ttft.
                 by_key[key]["average_tps"] = float(row.get("average_tps") or 0)
                 by_key[key]["average_ttft"] = float(row.get("average_ttft") or 0)
 
