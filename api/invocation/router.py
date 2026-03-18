@@ -2,7 +2,6 @@
 Invocations router.
 """
 
-import random
 import re
 import pybase64 as base64
 import pickle
@@ -934,7 +933,7 @@ async def hostname_invocation(
             payload["model"] = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-TEE"
         elif model == "tngtech/DeepSeek-TNG-R1T2-Chimera":
             payload["model"] = "tngtech/DeepSeek-TNG-R1T2-Chimera-TEE"
-        elif model in ("Qwen/Qwen3-32B", "Qwen/Qwen3-32B:THINKING") and random.random() <= 0.5:
+        elif model in ("Qwen/Qwen3-32B", "Qwen/Qwen3-32B:THINKING"):
             payload["model"] = "Qwen/Qwen3-32B-TEE"
             if model.endswith(":THINKING"):
                 payload["model"] = "Qwen/Qwen3-32B-TEE:THINKING"
