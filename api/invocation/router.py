@@ -139,12 +139,27 @@ async def _cached_get_metrics(table, cache_key):
 
 
 @router.get("/stats/llm")
-async def get_llm_stats(request: Request = None):
+async def get_llm_stats(
+    request: Request = None,
+    start_date: date = None,
+    end_date: date = None,
+    chute_id: str = None,
+):
     cache_key = b"llmstats"
     if request:
         if (cached := await settings.redis_client.get(cache_key)) is not None:
-            return json.loads(gzip.decompress(base64.b64decode(cached)))
-        return []
+            rv = json.loads(gzip.decompress(base64.b64decode(cached)))
+        else:
+            rv = []
+        if chute_id:
+            rv = [r for r in rv if r["chute_id"] == chute_id]
+        if start_date:
+            start_str = str(start_date)
+            rv = [r for r in rv if r["date"] >= start_str]
+        if end_date:
+            end_str = str(end_date)
+            rv = [r for r in rv if r["date"] <= end_str]
+        return rv
     usage_query = text("""
         WITH daily_usage AS (
             SELECT chute_id, bucket::date AS date,
@@ -152,19 +167,25 @@ async def get_llm_stats(request: Request = None):
                 SUM(input_tokens) AS total_input_tokens,
                 SUM(output_tokens) AS total_output_tokens
             FROM usage_data
+            WHERE bucket >= :cutoff
             GROUP BY chute_id, date
         ), latest_chute_names AS (
             SELECT DISTINCT ON (chute_id) chute_id, COALESCE(name, '[unknown]') AS name
             FROM chute_history
             ORDER BY chute_id, created_at DESC
         )
-        SELECT d.chute_id, COALESCE(n.name, '[unknown]') AS name, d.date,
-            d.total_requests, d.total_input_tokens, d.total_output_tokens
+        SELECT d.chute_id,
+            CASE WHEN c.user_id = 'dff3e6bb-3a6b-5a2b-9c48-da3abcd5ca5f'
+                THEN COALESCE(n.name, '[unknown]')
+                ELSE '[private]'
+            END AS name,
+            d.date, d.total_requests, d.total_input_tokens, d.total_output_tokens
         FROM daily_usage d
         LEFT JOIN latest_chute_names n ON d.chute_id = n.chute_id
+        LEFT JOIN chutes c ON d.chute_id = c.chute_id
     """)
     async with get_session() as session:
-        result = await session.execute(usage_query)
+        result = await session.execute(usage_query, {"cutoff": date(2025, 8, 25)})
         by_key = {}
         for row in result:
             key = (row.chute_id, str(row.date))
