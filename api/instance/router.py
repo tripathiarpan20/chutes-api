@@ -26,7 +26,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert
-from api.gpu import SUPPORTED_GPUS
+from api.gpu import SUPPORTED_GPUS, COMPUTE_MULTIPLIER
 from api.database import get_db_session, generate_uuid, get_session
 from api.config import settings
 from api.constants import (
@@ -1387,6 +1387,22 @@ async def _validate_launch_config_instance(
             )
             await error_session.commit()
         raise
+
+    # For private instances, use the actual GPU's rate/multiplier instead of the
+    # minimum across all supported GPUs in the node selector.
+    if instance.billed_to is not None:
+        actual_gpu = nodes[0].gpu_identifier
+        gpu_count = chute.node_selector.get("gpu_count", 1)
+        actual_base = gpu_count * COMPUTE_MULTIPLIER[actual_gpu]
+        original_base = node_selector.compute_multiplier
+        if original_base > 0 and actual_base != original_base:
+            ratio = actual_base / original_base
+            instance.compute_multiplier *= ratio
+        instance.hourly_rate = SUPPORTED_GPUS[actual_gpu]["hourly_rate"] * gpu_count
+        logger.info(
+            f"Adjusted private instance {instance.instance_id} to actual GPU {actual_gpu}: "
+            f"hourly_rate={instance.hourly_rate:.4f}, compute_multiplier={instance.compute_multiplier:.4f}"
+        )
 
     # Enforce rint_pubkey for chutes >= 0.5.1
     if semcomp(instance.chutes_version or "0.0.0", "0.5.1") >= 0:
