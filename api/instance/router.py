@@ -1394,14 +1394,19 @@ async def _validate_launch_config_instance(
         actual_gpu = nodes[0].gpu_identifier
         gpu_count = chute.node_selector.get("gpu_count", 1)
         actual_base = gpu_count * COMPUTE_MULTIPLIER[actual_gpu]
-        original_base = node_selector.compute_multiplier
-        if original_base > 0 and actual_base != original_base:
-            ratio = actual_base / original_base
+        ns_min_compute = node_selector.compute_multiplier
+        ns_min_hourly = instance.hourly_rate
+        if ns_min_compute > 0 and actual_base != ns_min_compute:
+            ratio = actual_base / ns_min_compute
             instance.compute_multiplier *= ratio
         instance.hourly_rate = SUPPORTED_GPUS[actual_gpu]["hourly_rate"] * gpu_count
         logger.info(
-            f"Adjusted private instance {instance.instance_id} to actual GPU {actual_gpu}: "
-            f"hourly_rate={instance.hourly_rate:.4f}, compute_multiplier={instance.compute_multiplier:.4f}"
+            f"Adjusted private instance {instance.instance_id} for "
+            f"chute_id={chute.chute_id} name={chute.name!r} to actual GPU {actual_gpu}: "
+            f"hourly_rate={ns_min_hourly:.4f}->{instance.hourly_rate:.4f} "
+            f"(delta={instance.hourly_rate - ns_min_hourly:+.4f}, ratio={instance.hourly_rate / ns_min_hourly if ns_min_hourly else 0:.2f}x), "
+            f"compute_multiplier={ns_min_compute:.4f}->{actual_base:.4f} "
+            f"(delta={actual_base - ns_min_compute:+.4f}, ratio={actual_base / ns_min_compute if ns_min_compute else 0:.2f}x)"
         )
 
     # Enforce rint_pubkey for chutes >= 0.5.1
