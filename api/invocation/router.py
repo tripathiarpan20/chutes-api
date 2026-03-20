@@ -913,10 +913,16 @@ async def hostname_invocation(
             payload["model"] = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-TEE"
         elif model == "tngtech/DeepSeek-TNG-R1T2-Chimera":
             payload["model"] = "tngtech/DeepSeek-TNG-R1T2-Chimera-TEE"
+        elif model == "chutesai/Mistral-Small-3.1-24B-Instruct-2503":
+            payload["model"] = "chutesai/Mistral-Small-3.1-24B-Instruct-2503-TEE"
         elif model in ("Qwen/Qwen3-32B", "Qwen/Qwen3-32B:THINKING"):
             payload["model"] = "Qwen/Qwen3-32B-TEE"
             if model.endswith(":THINKING"):
                 payload["model"] = "Qwen/Qwen3-32B-TEE:THINKING"
+        elif model in ("openai/gpt-oss-20b", "openai/gpt-oss-20b:THINKING"):
+            payload["model"] = "openai/gpt-oss-20b:THINKING"
+            if model.endswith(":THINKING"):
+                payload["model"] = "openai/gpt-oss-20b:THINKING"
 
         # No file support currently.
         if isinstance(payload.get("messages"), list):
