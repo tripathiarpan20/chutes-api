@@ -18,6 +18,12 @@ BEGIN
     -- Create startup period record and active period record (full rate).
     IF NEW.activated_at IS NOT NULL AND OLD.activated_at IS NULL THEN
         IF NEW.compute_multiplier IS NOT NULL THEN
+            -- Close any existing open record for this instance.
+            UPDATE instance_compute_history
+               SET ended_at = NOW()
+             WHERE instance_id = NEW.instance_id
+               AND ended_at IS NULL;
+
             -- Insert startup period: created_at to activated_at
             INSERT INTO instance_compute_history (instance_id, compute_multiplier, started_at, ended_at)
             VALUES (NEW.instance_id, NEW.compute_multiplier, OLD.created_at, NEW.activated_at);
