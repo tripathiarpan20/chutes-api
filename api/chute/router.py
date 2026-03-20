@@ -1603,13 +1603,26 @@ async def _deploy_chute(
         else 0
     )
     if deployment_fee and not accept_fee:
-        estimate = chute_args.node_selector.current_estimated_price
+        gpu_count = chute_args.node_selector.gpu_count or 1
+        if len(allowed_gpus) > 1:
+            hourly_range_msg = (
+                f"Your hourly rate per instance will range from ~${round(min_price * gpu_count, 2)}/hr "
+                f"to ~${round(max_price * gpu_count, 2)}/hr ({gpu_count} GPU(s)), subject to change with pricing/market rate adjustments, "
+                "based on the *actual* GPU assigned when an instance is created.\n"
+                "You can control max prices in the node selector by specifying either explicit include=[..] lists, or setting max_hourly_price_per_gpu=\n"
+            )
+        else:
+            hourly_range_msg = (
+                f"Your hourly rate per instance will be ~${round(min_price * gpu_count, 2)}/hr "
+                f"({gpu_count} GPU(s)), subject to change with pricing/market rate adjustments.\n"
+            )
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail=(
                 "DEPLOYMENT FEE NOTICE:\n===\nThere is a deployment fee of (hourly price per GPU * number of GPUs * 3), "
-                f"which for this configuration is: ${round(deployment_fee, 2)}\n "
-                "To acknowledge this fee, ensure you have chutes>=0.3.23 and re-run the deployment command with `--accept-fee`"
+                f"which for this configuration is: ${round(deployment_fee, 2)}\n"
+                f"{hourly_range_msg}"
+                "To acknowledge this fee and hourly rate, ensure you have chutes>=0.3.23 and re-run the deployment command with `--accept-fee`"
             ),
         )
     if current_user.balance <= deployment_fee and not current_user.has_role(
