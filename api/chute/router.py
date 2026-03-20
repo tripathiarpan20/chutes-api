@@ -165,6 +165,24 @@ async def _inject_current_estimated_price(chute: Chute, response: ChuteResponse)
                 for unit in values:
                     values[unit] -= values[unit] * chute.discount
 
+    # For private chutes, add a price range since billing is based on the actual GPU.
+    if not chute.public:
+        supported = node_selector.supported_gpus
+        if supported:
+            gpu_count = chute.node_selector.get("gpu_count", 1)
+            gpu_prices = [SUPPORTED_GPUS[gpu]["hourly_rate"] for gpu in supported]
+            min_hourly = min(gpu_prices) * gpu_count
+            max_hourly = max(gpu_prices) * gpu_count
+            response.current_estimated_price["hourly_price_range"] = {
+                "usd": {"min": min_hourly, "max": max_hourly},
+            }
+            tao_usd = await get_fetcher().get_price("tao")
+            if tao_usd:
+                response.current_estimated_price["hourly_price_range"]["tao"] = {
+                    "min": min_hourly / tao_usd,
+                    "max": max_hourly / tao_usd,
+                }
+
     # Fix node selector return value.
     response.node_selector.update(
         {
