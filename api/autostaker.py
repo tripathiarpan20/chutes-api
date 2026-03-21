@@ -198,11 +198,7 @@ async def _submit_extrinsic_direct(
     receipt = await substrate.submit_extrinsic(extrinsic, wait_for_inclusion=True)
     is_success = await receipt.is_success
     if not is_success:
-        error_msg = (
-            await receipt.error_message
-            if hasattr(receipt.error_message, "__await__")
-            else receipt.error_message
-        )
+        error_msg = await receipt.error_message
         return False, f"Extrinsic failed: {error_msg}"
     return True, None
 
