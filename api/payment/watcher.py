@@ -25,7 +25,7 @@ from api.user.schemas import User, InvocationQuota
 from api.payment.schemas import Payment, PaymentMonitorState
 from api.config import settings
 from api.database import get_session, engine, Base
-from api.autostaker import upsert_pending_stake
+from api.autostaker import upsert_pending_stake, DUST_THRESHOLD_RAO
 from api.agent_registration.schemas import AgentRegistration
 
 
@@ -263,7 +263,7 @@ class PaymentMonitor:
                 uuid.uuid5(uuid.NAMESPACE_OID, f"{block}:{to_address}:{from_address}:{amount}")
             )
             delta = amount * fmv / 1e9
-            if amount < 7000000:
+            if amount < DUST_THRESHOLD_RAO:
                 logger.warning("Dust was sent to wallet, ignoring...")
                 return
             payment = Payment(
@@ -343,7 +343,7 @@ class PaymentMonitor:
                 )
             )
 
-            if tao_amount < 7000000:
+            if tao_amount < DUST_THRESHOLD_RAO:
                 logger.warning("Dust stake transfer was sent, ignoring...")
                 return
 
@@ -433,7 +433,7 @@ class PaymentMonitor:
                 return
 
             delta = amount * fmv / 1e9
-            if amount < 7000000:
+            if amount < DUST_THRESHOLD_RAO:
                 logger.warning("Dust was sent to agent registration wallet, ignoring...")
                 return
 

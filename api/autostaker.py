@@ -37,6 +37,7 @@ MAX_STAKE_PER_ITERATION_TAO = 25  # Max TAO worth to stake per iteration
 MIN_STAKE_TAO = 0.1  # Minimum stake amount
 MAX_SLIPPAGE_PERCENT = 0.003  # 0.3% max slippage before chunking
 TX_FEE_BUFFER_RAO = 5_000_000  # 0.005 TAO buffer for tx fees (post 10x fee increase)
+DUST_THRESHOLD_RAO = 10_000_000  # 0.01 TAO - minimum payment worth processing
 AUTOSTAKER_CONCURRENCY = 24  # Max number of wallets processed concurrently
 STALE_BASE_MINUTES = 15  # Default stale threshold for "processing" rows
 STALE_MAX_MINUTES = 60  # Upper bound for adaptive stale threshold
@@ -666,6 +667,15 @@ async def reconcile_and_process_stake(
                 f"on {pending_stake.source_hotkey}:{pending_stake.netuid} (chain exhausted)"
             )
             return True, pending_stake.pending_balance, True, None  # Mark as complete
+
+        # Verify wallet has enough free TAO to pay tx fees for move_stake
+        free_balance = await get_free_balance(substrate, pending_stake.wallet_address, block_hash)
+        if free_balance < TX_FEE_BUFFER_RAO:
+            logger.warning(
+                f"Wallet {pending_stake.wallet_address} has insufficient free TAO "
+                f"({free_balance / ONE_TAO_RAO:.9f}) to pay move_stake tx fees, skipping"
+            )
+            return False, 0, False, "Insufficient free TAO for tx fees"
 
         # Use the actual chain stake as the source of truth
         actual_pending = chain_stake
