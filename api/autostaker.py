@@ -36,6 +36,7 @@ ONE_TAO_RAO = 10**9  # 1 TAO = 1e9 rao
 MAX_STAKE_PER_ITERATION_TAO = 25  # Max TAO worth to stake per iteration
 MIN_STAKE_TAO = 0.1  # Minimum stake amount
 MAX_SLIPPAGE_PERCENT = 0.003  # 0.3% max slippage before chunking
+TX_FEE_BUFFER_RAO = 5_000_000  # 0.005 TAO buffer for tx fees (post 10x fee increase)
 AUTOSTAKER_CONCURRENCY = 24  # Max number of wallets processed concurrently
 STALE_BASE_MINUTES = 15  # Default stale threshold for "processing" rows
 STALE_MAX_MINUTES = 60  # Upper bound for adaptive stale threshold
@@ -614,7 +615,7 @@ async def reconcile_and_process_stake(
             constant_name="ExistentialDeposit",
             block_hash=block_hash,
         )
-        existential_deposit = int(getattr(result, "value", 0)) + 500000 if result else 500000
+        existential_deposit = (int(getattr(result, "value", 0)) + TX_FEE_BUFFER_RAO) if result else TX_FEE_BUFFER_RAO
         available_balance = max(0, chain_balance - existential_deposit)
 
         # If chain has no balance, we're done (regardless of what DB says)
