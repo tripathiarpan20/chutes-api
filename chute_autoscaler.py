@@ -1915,7 +1915,7 @@ async def _perform_autoscale_impl(
 
     # Log revenue per instance and per GPU for all public vLLM chutes with instances.
     for ctx in contexts.values():
-        if ctx.standard_template == "vllm" and ctx.public and ctx.current_count > 0:
+        if ctx.standard_template == "vllm" and ctx.tee and ctx.public and ctx.current_count > 0:
             gpus = ctx.gpu_count or 1
             rev_per_gpu = ctx.hourly_revenue_per_instance / max(gpus, 1)
             logger.info(
