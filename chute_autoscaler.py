@@ -1268,7 +1268,7 @@ async def get_avg_instance_counts() -> Dict[str, Dict[str, float]]:
             for row in rows:
                 if row.chute_id not in result:
                     result[row.chute_id] = {"30m": 0.0, "1h": 0.0, "2h": 0.0}
-                result[row.chute_id][key] = max(row.avg_instances, 0.0)
+                result[row.chute_id][key] = float(max(row.avg_instances, 0.0))
     return result
 
 
