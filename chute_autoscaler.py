@@ -1913,18 +1913,29 @@ async def _perform_autoscale_impl(
                         f"total_rev/hr=${total_rev:.4f})"
                     )
 
-    # Log revenue per instance and per GPU for all public vLLM chutes with instances.
-    for ctx in contexts.values():
-        if ctx.standard_template == "vllm" and ctx.tee and ctx.public and ctx.current_count > 0:
-            gpus = ctx.gpu_count or 1
-            rev_per_gpu = ctx.hourly_revenue_per_instance / max(gpus, 1)
-            logger.info(
-                f"Revenue [{ctx.chute_id}]: "
-                f"rev/inst/hr=${ctx.hourly_revenue_per_instance:.4f} "
-                f"rev/gpu/hr=${rev_per_gpu:.4f} "
-                f"gpus/inst={gpus} instances={ctx.current_count} "
-                f"profitable={ctx.profitable} rev_factor={ctx.revenue_factor:.2f}"
-            )
+    # Log revenue per instance and per GPU for public TEE vLLM chutes, sorted by revenue.
+    tee_rev_chutes = sorted(
+        [ctx for ctx in contexts.values()
+         if ctx.standard_template == "vllm" and ctx.tee and ctx.public and ctx.current_count > 0],
+        key=lambda c: c.hourly_revenue_per_instance,
+        reverse=True,
+    )
+    for ctx in tee_rev_chutes:
+        gpus = ctx.gpu_count or 1
+        rev_per_gpu = ctx.hourly_revenue_per_instance / max(gpus, 1)
+        util = ctx.utilization_basis
+        theoretical_rev = ctx.hourly_revenue_per_instance / max(util, 0.01) if util > 0 else 0.0
+        theoretical_per_gpu = theoretical_rev / max(gpus, 1)
+        name = ctx.info.name if ctx.info else ctx.chute_id
+        logger.info(
+            f"Revenue [{name}]: "
+            f"rev/inst/hr=${ctx.hourly_revenue_per_instance:.4f} "
+            f"rev/gpu/hr=${rev_per_gpu:.4f} "
+            f"util={util:.1%} "
+            f"@100%: rev/inst/hr=${theoretical_rev:.4f} rev/gpu/hr=${theoretical_per_gpu:.4f} "
+            f"gpus/inst={gpus} instances={ctx.current_count} "
+            f"profitable={ctx.profitable} rev_factor={ctx.revenue_factor:.2f}"
+        )
 
     # TEE capacity limit: when there are more than 3 public TEE chutes competing for scale-up,
     # only allow the top 3 by hourly revenue per instance to scale. TEE hardware is scarce,
