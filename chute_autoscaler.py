@@ -219,15 +219,12 @@ STARVING_COOLDOWN_MINUTES = 90
 STARVING_HISTORY_KEY_PREFIX = "starving:"
 
 # Higher min instance counts for some chutes...
-LIMIT_OVERRIDES = {}
+LIMIT_OVERRIDES = {
+    "7858c162-4f52-5a11-868e-ddef2c04f4d8": 1,
+}
 FAILSAFE = {
-    "0d7184a2-32a3-53e0-9607-058c37edaab5": 6,
-    "e51e818e-fa63-570d-9f68-49d7d1b4d12f": 10,
     "08a7a60f-6956-5a9e-9983-5603c3ac5a38": 7,
     "2ff25e81-4586-5ec8-b892-3a6f342693d7": 7,
-    "8f3bb827-b9e6-5487-88bc-ee8f0c6f5810": 4,
-    "51a4284a-a5a0-5e44-a9cc-6af5a2abfbcf": 4,
-    "6320ab82-9e94-5d63-8e38-d136f61dc157": 3,
     "ac059e33-eb27-541c-b9a9-24b214036475": 6,
 }
 
