@@ -243,7 +243,7 @@ async def update_usage_data(
     from api.metrics.invocation import track_invocation_usage
 
     # Track in Prometheus for miner metrics endpoint
-    track_invocation_usage(chute_id, balance_used, compute_time)
+    track_invocation_usage(chute_id, balance_used, compute_time, paygo_amount)
 
     record = json.dumps(
         {
