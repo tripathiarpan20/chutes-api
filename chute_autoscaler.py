@@ -1913,6 +1913,19 @@ async def _perform_autoscale_impl(
                         f"total_rev/hr=${total_rev:.4f})"
                     )
 
+    # Log revenue per instance and per GPU for all public vLLM chutes with instances.
+    for ctx in contexts.values():
+        if ctx.standard_template == "vllm" and ctx.public and ctx.current_count > 0:
+            gpus = ctx.gpu_count or 1
+            rev_per_gpu = ctx.hourly_revenue_per_instance / max(gpus, 1)
+            logger.info(
+                f"Revenue [{ctx.chute_id}]: "
+                f"rev/inst/hr=${ctx.hourly_revenue_per_instance:.4f} "
+                f"rev/gpu/hr=${rev_per_gpu:.4f} "
+                f"gpus/inst={gpus} instances={ctx.current_count} "
+                f"profitable={ctx.profitable} rev_factor={ctx.revenue_factor:.2f}"
+            )
+
     # TEE capacity limit: when there are more than 3 public TEE chutes competing for scale-up,
     # only allow the top 3 by hourly revenue per instance to scale. TEE hardware is scarce,
     # so we concentrate capacity on the most valuable chutes.
