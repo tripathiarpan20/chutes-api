@@ -1936,8 +1936,8 @@ async def _perform_autoscale_impl(
         if ctx.tee
         and ctx.public
         and (ctx.is_starving or ctx.utilization_basis >= ctx.threshold or ctx.current_count == 0)
-        # Never block chutes at or below their minimum — they must reach failsafe first
-        and ctx.current_count > FAILSAFE.get(ctx.chute_id, UNDERUTILIZED_CAP)
+        # Only exempt truly cold chutes (0 instances) from the TEE limit
+        and ctx.current_count > 0
     ]
     if len(tee_scaling_candidates) > MAX_TEE_SCALING:
         # Sort by hourly revenue per instance descending; zero-revenue goes last
