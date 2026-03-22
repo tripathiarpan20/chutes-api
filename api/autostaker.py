@@ -616,7 +616,9 @@ async def reconcile_and_process_stake(
             constant_name="ExistentialDeposit",
             block_hash=block_hash,
         )
-        existential_deposit = (int(getattr(result, "value", 0)) + TX_FEE_BUFFER_RAO) if result else TX_FEE_BUFFER_RAO
+        existential_deposit = (
+            (int(getattr(result, "value", 0)) + TX_FEE_BUFFER_RAO) if result else TX_FEE_BUFFER_RAO
+        )
         available_balance = max(0, chain_balance - existential_deposit)
 
         # If chain has no balance, we're done (regardless of what DB says)
