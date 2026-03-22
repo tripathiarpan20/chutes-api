@@ -279,6 +279,7 @@ class AutoScaleContext:
         self.utilization_basis = max(
             metrics["utilization"].get("5m", 0), metrics["utilization"].get("15m", 0)
         )
+        self.utilization_2h = metrics["utilization"].get("2h", 0.0)
         # Track all rate limit windows
         self.rate_limit_5m = metrics["rate_limit_ratio"].get("5m", 0)
         self.rate_limit_15m = metrics["rate_limit_ratio"].get("15m", 0)
@@ -354,8 +355,8 @@ class AutoScaleContext:
             self.hourly_cost = COMPUTE_UNIT_PRICE_BASIS * ns.compute_multiplier if ns else 0.0
         except Exception:
             self.hourly_cost = 0.0
-        # Hourly revenue per instance (30m total revenue / avg instances, scaled to hourly)
-        self.hourly_revenue_per_instance = rev_30m * 2.0  # 30m window × 2 = hourly rate
+        # Hourly revenue per instance (2h total revenue / avg instances, scaled to hourly)
+        self.hourly_revenue_per_instance = rev_2h / 2.0  # 2h window / 2 = hourly rate
         self.profitable = True  # default, computed in second pass
 
 
@@ -1290,6 +1291,7 @@ async def get_all_chute_metrics() -> Dict[str, Dict]:
         "utilization_5m": "avg by (chute_id) (avg_over_time(utilization[5m]))",
         "utilization_15m": "avg by (chute_id) (avg_over_time(utilization[15m]))",
         "utilization_1h": "avg by (chute_id) (avg_over_time(utilization[1h]))",
+        "utilization_2h": "avg by (chute_id) (avg_over_time(utilization[2h]))",
         # Completed requests
         "completed_5m": "sum by (chute_id) (increase(requests_completed_total[5m]))",
         "completed_15m": "sum by (chute_id) (increase(requests_completed_total[15m]))",
@@ -1314,7 +1316,7 @@ async def get_all_chute_metrics() -> Dict[str, Dict]:
     chute_metrics = {}
     for chute_id in all_db_chute_ids:
         chute_metrics[chute_id] = {
-            "utilization": {"current": 0.0, "5m": 0.0, "15m": 0.0, "1h": 0.0},
+            "utilization": {"current": 0.0, "5m": 0.0, "15m": 0.0, "1h": 0.0, "2h": 0.0},
             "completed_requests": {"5m": 0.0, "15m": 0.0, "1h": 0.0},
             "rate_limited_requests": {"5m": 0.0, "15m": 0.0, "1h": 0.0},
             "total_requests": {"5m": 0.0, "15m": 0.0, "1h": 0.0},
@@ -1941,7 +1943,7 @@ async def _perform_autoscale_impl(
         for ctx in tee_rev_chutes:
             gpus = ctx.gpu_count or 1
             rev_per_gpu = ctx.hourly_revenue_per_instance / max(gpus, 1)
-            util = ctx.utilization_basis
+            util = ctx.utilization_2h
             theoretical_rev = ctx.hourly_revenue_per_instance / max(util, 0.01) if util > 0 else 0.0
             theoretical_per_gpu = theoretical_rev / max(gpus, 1)
             name = ctx.info.name if ctx.info else ctx.chute_id
@@ -1977,29 +1979,33 @@ async def _perform_autoscale_impl(
         console.print(table)
         logger.info("\n" + console.file.getvalue())
 
-    # TEE capacity limit: when there are more than 3 public TEE chutes competing for scale-up,
-    # only allow the top 3 by hourly revenue per instance to scale. TEE hardware is scarce,
-    # so we concentrate capacity on the most valuable chutes.
-    MAX_TEE_SCALING = 3
-    tee_scaling_candidates = [
+    # TEE capacity limit: only apply when there's actual contention — more chutes want to
+    # scale up than we can accommodate. If the top profitable chutes don't need scaling,
+    # don't waste their slots blocking others.
+    MAX_TEE_SCALING = 6
+    tee_wants_scaleup = [
         ctx
         for ctx in contexts.values()
         if ctx.tee
         and ctx.public
         and (ctx.is_starving or ctx.utilization_basis >= ctx.threshold or ctx.current_count == 0)
-        # Only exempt truly cold chutes (0 instances) from the TEE limit
         and ctx.current_count > 0
     ]
-    if len(tee_scaling_candidates) > MAX_TEE_SCALING:
+    if len(tee_wants_scaleup) > MAX_TEE_SCALING:
         # Sort by hourly revenue per instance descending; zero-revenue goes last
-        tee_scaling_candidates.sort(key=lambda c: c.hourly_revenue_per_instance, reverse=True)
-        blocked_tee = tee_scaling_candidates[MAX_TEE_SCALING:]
+        tee_wants_scaleup.sort(key=lambda c: c.hourly_revenue_per_instance, reverse=True)
+        blocked_tee = tee_wants_scaleup[MAX_TEE_SCALING:]
         for ctx in blocked_tee:
             ctx.blocked_by_tee_limit = True
             logger.info(
                 f"TEE scale-up blocked: {ctx.chute_id} not in top {MAX_TEE_SCALING} by revenue "
                 f"(rev/hr=${ctx.hourly_revenue_per_instance:.4f})"
             )
+    elif len(tee_wants_scaleup) > 0:
+        logger.info(
+            f"TEE scaling: {len(tee_wants_scaleup)} chutes want scale-up, "
+            f"under limit of {MAX_TEE_SCALING} — no blocking needed"
+        )
 
     # If any starving chutes exist, block non-starving scale-ups that are GPU-compatible.
     if starving_chutes:
