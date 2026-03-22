@@ -386,6 +386,7 @@ async def instance_cleanup():
 # EMA smoothing for stability
 EMA_ALPHA_URGENCY = 0.3  # For urgency/boost calculations
 EMA_ALPHA_UTIL = 0.4  # For utilization (slightly more reactive)
+EMA_ALPHA_TARGET = 0.4  # For target_count smoothing (prevents thrashing on scale-ups)
 EMA_REDIS_TTL = 7200  # 2 hours - survive missed runs but not stale forever
 
 
@@ -408,6 +409,7 @@ async def get_smoothed_metrics(chute_ids: List[str]) -> Dict[str, Dict[str, floa
             smoothed[chute_id] = {
                 "urgency": float(data.get(b"urgency", 0)),
                 "util": float(data.get(b"util", 0)),
+                "target": float(data.get(b"target", 0)),
             }
     return smoothed
 
@@ -422,13 +424,13 @@ async def save_smoothed_metrics(metrics: Dict[str, Dict[str, float]]):
 
     pipe = settings.redis_client.pipeline()
     for chute_id, values in metrics.items():
-        pipe.hset(
-            f"smooth:{chute_id}",
-            mapping={
-                "urgency": str(values["urgency"]),
-                "util": str(values["util"]),
-            },
-        )
+        mapping = {
+            "urgency": str(values["urgency"]),
+            "util": str(values["util"]),
+        }
+        if "target" in values:
+            mapping["target"] = str(values["target"])
+        pipe.hset(f"smooth:{chute_id}", mapping=mapping)
         pipe.expire(f"smooth:{chute_id}", EMA_REDIS_TTL)
     await pipe.execute()
 
@@ -2119,6 +2121,32 @@ async def _perform_autoscale_impl(
             ctx.downscale_amount = 0
             # Keep target_count at current to avoid Redis showing lower targets
             ctx.target_count = ctx.current_count
+
+        # Smooth target_count for scale-ups to prevent thrashing.
+        # Scale-downs and no_action use the raw target (scale-downs are already conservative).
+        raw_target = ctx.target_count
+        if "scale_up" in ctx.action and ctx.target_count > ctx.current_count:
+            prev = previous_smoothed.get(ctx.chute_id)
+            prev_target = prev["target"] if prev and prev.get("target") else None
+            if prev_target is not None and prev_target > 0:
+                smoothed_target = calculate_ema(
+                    float(ctx.target_count), prev_target, EMA_ALPHA_TARGET
+                )
+                # Round up so we don't stall scaling, but cap at the raw target
+                ctx.target_count = min(ctx.target_count, math.ceil(smoothed_target))
+                # Ensure we still scale up at least 1 above current
+                ctx.target_count = max(ctx.current_count + 1, ctx.target_count)
+                ctx.upscale_amount = ctx.target_count - ctx.current_count
+                if ctx.target_count != raw_target:
+                    logger.info(
+                        f"Target smoothed: {ctx.chute_id} raw={raw_target} -> smoothed={ctx.target_count} "
+                        f"(prev_smooth={prev_target:.1f}, alpha={EMA_ALPHA_TARGET})"
+                    )
+            # Update smoothed target for next run
+            new_smoothed_metrics.setdefault(ctx.chute_id, {})["target"] = float(ctx.target_count)
+        else:
+            # For non-scale-up actions, still track the target for EMA continuity
+            new_smoothed_metrics.setdefault(ctx.chute_id, {})["target"] = float(ctx.target_count)
 
         chute_actions[ctx.chute_id] = ctx.action
         chute_target_counts[ctx.chute_id] = ctx.target_count

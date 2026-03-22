@@ -386,12 +386,13 @@ async def _check_blacklisted(db, hotkey):
     return mgnode
 
 
-async def _check_scalable(db, chute, hotkey, created_at=None):
+async def _check_scalable(db, chute, hotkey):
     chute_id = chute.chute_id
     query = text("""
         SELECT
             COUNT(*) AS total_count,
             COUNT(CASE WHEN active IS true AND verified IS true THEN 1 ELSE NULL END) AS active_count,
+            COUNT(CASE WHEN NOT (active IS false AND activated_at IS NOT NULL) THEN 1 ELSE NULL END) AS live_count,
             COUNT(CASE WHEN miner_hotkey = :hotkey THEN 1 ELSE NULL END) AS hotkey_count
         FROM instances
         WHERE chute_id = :chute_id
@@ -401,6 +402,7 @@ async def _check_scalable(db, chute, hotkey, created_at=None):
     )
     current_count = count_result["total_count"]
     active_count = count_result["active_count"]
+    live_count = count_result["live_count"]
     hotkey_count = count_result["hotkey_count"]
 
     # Get target count from Redis
@@ -428,33 +430,21 @@ async def _check_scalable(db, chute, hotkey, created_at=None):
                 f"using conservative current count as default: {target_count}"
             )
 
+    # For TEE chutes, also gate on live instance count (active + pending, excludes disabled).
+    # TEE instances take a long time to spin up, so allowing many more live instances
+    # than the target wastes miner time. Allow target + 1 to permit one racer.
+    if chute.tee and live_count >= target_count + 1:
+        logger.warning(
+            f"SCALELOCK (TEE live): chute {chute_id=} {chute.name} has too many live instances: "
+            f"{live_count=}, {active_count=}, {target_count=}, {hotkey_count=}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"TEE chute {chute_id} already has {live_count} live instances (target: {target_count}).",
+        )
+
     # Check if scaling is allowed based on target count.
     if active_count >= target_count:
-        if created_at:
-            capacity_query = text("""
-                SELECT target_count, instance_count
-                FROM capacity_log
-                WHERE chute_id = :chute_id
-                  AND timestamp <= :created_at
-                ORDER BY timestamp DESC
-                LIMIT 1
-            """)
-            capacity_result = await db.execute(
-                capacity_query,
-                {"chute_id": chute_id, "created_at": created_at.replace(tzinfo=None)},
-            )
-            capacity_row = capacity_result.mappings().first()
-            if (
-                capacity_row
-                and capacity_row.get("target_count") is not None
-                and capacity_row.get("instance_count") is not None
-                and active_count < capacity_row["target_count"]
-            ):
-                logger.info(
-                    f"SCALELOCK bypass: {chute_id=} instance created at {created_at} when "
-                    f"target_count={capacity_row['target_count']}"
-                )
-                return
         logger.warning(
             f"SCALELOCK: chute {chute_id=} {chute.name} has reached target capacity: "
             f"{current_count=}, {active_count=}, {target_count=}, {hotkey_count=}"
@@ -1009,9 +999,7 @@ async def _validate_launch_config_instance(
         ):
             await _check_scalable_private(db, chute, miner)
         else:
-            await _check_scalable(
-                db, chute, launch_config.miner_hotkey, created_at=launch_config.created_at
-            )
+            await _check_scalable(db, chute, launch_config.miner_hotkey)
 
     # IP matches?
     x_forwarded_for = request.headers.get("X-Forwarded-For")
@@ -2156,9 +2144,7 @@ async def activate_launch_config_instance(
                 detail=reason,
             )
     elif chute.public:
-        await _check_scalable(
-            db, chute, launch_config.miner_hotkey, created_at=launch_config.created_at
-        )
+        await _check_scalable(db, chute, launch_config.miner_hotkey)
 
     # Activate the instance (and trigger tentative billing stop time).
     if not instance.active:
