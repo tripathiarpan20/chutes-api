@@ -473,6 +473,11 @@ async def _check_scalable(db, chute, hotkey):
 
 async def _check_scalable_activation(db, chute, hotkey):
     """Activation path: gate on active_count only, since the instance already exists."""
+    # Public TEE instances always pass activation — they were scalable when created,
+    # and the autoscaler TEE limit may have changed since then.
+    if chute.tee and chute.public:
+        return
+
     chute_id = chute.chute_id
     (
         current_count,
