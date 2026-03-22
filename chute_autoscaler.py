@@ -16,6 +16,9 @@ from loguru import logger
 from datetime import timedelta, datetime, timezone
 from typing import Dict, Optional, Set, List, Tuple
 import aiohttp
+from io import StringIO
+from rich.console import Console
+from rich.table import Table
 from sqlalchemy import (
     text,
     select,
@@ -1913,29 +1916,66 @@ async def _perform_autoscale_impl(
                         f"total_rev/hr=${total_rev:.4f})"
                     )
 
-    # Log revenue per instance and per GPU for public TEE vLLM chutes, sorted by revenue.
+    # Log revenue table for public TEE vLLM chutes, sorted by revenue.
     tee_rev_chutes = sorted(
-        [ctx for ctx in contexts.values()
-         if ctx.standard_template == "vllm" and ctx.tee and ctx.public and ctx.current_count > 0],
+        [
+            ctx
+            for ctx in contexts.values()
+            if ctx.standard_template == "vllm" and ctx.tee and ctx.public and ctx.current_count > 0
+        ],
         key=lambda c: c.hourly_revenue_per_instance,
         reverse=True,
     )
-    for ctx in tee_rev_chutes:
-        gpus = ctx.gpu_count or 1
-        rev_per_gpu = ctx.hourly_revenue_per_instance / max(gpus, 1)
-        util = ctx.utilization_basis
-        theoretical_rev = ctx.hourly_revenue_per_instance / max(util, 0.01) if util > 0 else 0.0
-        theoretical_per_gpu = theoretical_rev / max(gpus, 1)
-        name = ctx.info.name if ctx.info else ctx.chute_id
-        logger.info(
-            f"Revenue [{name}]: "
-            f"rev/inst/hr=${ctx.hourly_revenue_per_instance:.4f} "
-            f"rev/gpu/hr=${rev_per_gpu:.4f} "
-            f"util={util:.1%} "
-            f"@100%: rev/inst/hr=${theoretical_rev:.4f} rev/gpu/hr=${theoretical_per_gpu:.4f} "
-            f"gpus/inst={gpus} instances={ctx.current_count} "
-            f"profitable={ctx.profitable} rev_factor={ctx.revenue_factor:.2f}"
-        )
+    if tee_rev_chutes:
+        table = Table(title="TEE Revenue Report", show_lines=False)
+        table.add_column("Chute", style="cyan", no_wrap=True)
+        table.add_column("Rev/Inst", justify="right")
+        table.add_column("Rev/GPU", justify="right")
+        table.add_column("Util", justify="right")
+        table.add_column("@100% Inst", justify="right")
+        table.add_column("@100% GPU", justify="right")
+        table.add_column("GPUs", justify="right")
+        table.add_column("Inst", justify="right")
+        table.add_column("Prof", justify="center")
+        table.add_column("Factor", justify="right")
+        for ctx in tee_rev_chutes:
+            gpus = ctx.gpu_count or 1
+            rev_per_gpu = ctx.hourly_revenue_per_instance / max(gpus, 1)
+            util = ctx.utilization_basis
+            theoretical_rev = ctx.hourly_revenue_per_instance / max(util, 0.01) if util > 0 else 0.0
+            theoretical_per_gpu = theoretical_rev / max(gpus, 1)
+            name = ctx.info.name if ctx.info else ctx.chute_id
+            est_cost = ctx.hourly_cost * ESTIMATED_COST_RATIO
+            # Color revenue: green if profitable, yellow if @100% would be profitable, red otherwise
+            if ctx.hourly_revenue_per_instance >= est_cost:
+                rev_style = "bold green"
+            elif theoretical_rev >= est_cost:
+                rev_style = "yellow"
+            else:
+                rev_style = "bold red"
+            # Color util: green <50%, yellow 50-85%, red >85%
+            if util < 0.5:
+                util_style = "green"
+            elif util < 0.85:
+                util_style = "yellow"
+            else:
+                util_style = "red"
+            prof_str = "[bold green]Y[/]" if ctx.profitable else "[bold red]N[/]"
+            table.add_row(
+                name,
+                f"[{rev_style}]{ctx.hourly_revenue_per_instance:.2f}[/]",
+                f"[{rev_style}]{rev_per_gpu:.2f}[/]",
+                f"[{util_style}]{util:.1%}[/]",
+                f"[{rev_style}]{theoretical_rev:.2f}[/]",
+                f"[{rev_style}]{theoretical_per_gpu:.2f}[/]",
+                str(gpus),
+                str(ctx.current_count),
+                prof_str,
+                f"{ctx.revenue_factor:.2f}",
+            )
+        console = Console(file=StringIO(), force_terminal=True, width=160)
+        console.print(table)
+        logger.info("\n" + console.file.getvalue())
 
     # TEE capacity limit: when there are more than 3 public TEE chutes competing for scale-up,
     # only allow the top 3 by hourly revenue per instance to scale. TEE hardware is scarce,

@@ -386,8 +386,8 @@ async def _check_blacklisted(db, hotkey):
     return mgnode
 
 
-async def _check_scalable(db, chute, hotkey):
-    chute_id = chute.chute_id
+async def _get_instance_counts_and_target(db, chute_id, hotkey):
+    """Shared helper to get instance counts and target for a chute."""
     query = text("""
         SELECT
             COUNT(*) AS total_count,
@@ -430,7 +430,21 @@ async def _check_scalable(db, chute, hotkey):
                 f"using conservative current count as default: {target_count}"
             )
 
-    # For TEE chutes, also gate on live instance count (active + pending, excludes disabled).
+    return current_count, active_count, live_count, hotkey_count, target_count
+
+
+async def _check_scalable(db, chute, hotkey):
+    """Creation path: gate on live_count to prevent over-launching."""
+    chute_id = chute.chute_id
+    (
+        current_count,
+        active_count,
+        live_count,
+        hotkey_count,
+        target_count,
+    ) = await _get_instance_counts_and_target(db, chute_id, hotkey)
+
+    # For TEE chutes, gate on live instance count (active + pending, excludes disabled).
     # TEE instances take a long time to spin up, so allowing many more live instances
     # than the target wastes miner time. Allow target + 1 to permit one racer.
     if chute.tee and live_count >= target_count + 1:
@@ -443,15 +457,39 @@ async def _check_scalable(db, chute, hotkey):
             detail=f"TEE chute {chute_id} already has {live_count} live instances (target: {target_count}).",
         )
 
-    # Check if scaling is allowed based on target count.
+    # Non-TEE: gate on active_count only, allowing miners to race with pending instances.
+    # TEE creation is already gated above on live_count, so active_count here is a fallback
+    # that only matters for non-TEE chutes.
     if active_count >= target_count:
         logger.warning(
             f"SCALELOCK: chute {chute_id=} {chute.name} has reached target capacity: "
-            f"{current_count=}, {active_count=}, {target_count=}, {hotkey_count=}"
+            f"{current_count=}, {active_count=}, {live_count=}, {target_count=}, {hotkey_count=}"
         )
         raise HTTPException(
             status_code=status.HTTP_423_LOCKED,
             detail=f"Chute {chute_id} has reached its target capacity of {target_count} instances.",
+        )
+
+
+async def _check_scalable_activation(db, chute, hotkey):
+    """Activation path: gate on active_count only, since the instance already exists."""
+    chute_id = chute.chute_id
+    (
+        current_count,
+        active_count,
+        live_count,
+        hotkey_count,
+        target_count,
+    ) = await _get_instance_counts_and_target(db, chute_id, hotkey)
+
+    if active_count >= target_count:
+        logger.warning(
+            f"SCALELOCK (activation): chute {chute_id=} {chute.name} active instances at target: "
+            f"{active_count=}, {target_count=}, {live_count=}, {hotkey_count=}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"Chute {chute_id} already has {active_count} active instances (target: {target_count}).",
         )
 
 
@@ -2144,7 +2182,7 @@ async def activate_launch_config_instance(
                 detail=reason,
             )
     elif chute.public:
-        await _check_scalable(db, chute, launch_config.miner_hotkey)
+        await _check_scalable_activation(db, chute, launch_config.miner_hotkey)
 
     # Activate the instance (and trigger tentative billing stop time).
     if not instance.active:
