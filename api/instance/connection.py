@@ -12,14 +12,14 @@ from cryptography.x509.oid import NameOID
 
 _POOL_MAX = 2048
 
-# TCP keepalive: detect dead peers in ~50 minutes.
-# 2400s idle before first probe, then probe every 120s, give up after 5 failures.
-# Must be well under the 60-minute LB timeout to catch dead connections
-# without false-positiving on long-running LLM requests (30+ minutes).
+# TCP keepalive: detect dead peers in ~110s.
+# 60s idle before first probe, then probe every 10s, give up after 5 failures.
+# Probes are ACK'd by the remote kernel even when the app is idle, so this
+# won't false-positive on slow streams — only fires when the peer is truly gone.
 _KEEPALIVE_SOCK_OPTS = [
     (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
-    (socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 2400),
-    (socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 120),
+    (socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60),
+    (socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10),
     (socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5),
 ]
 

@@ -227,6 +227,7 @@ LIMIT_OVERRIDES = {
     "7858c162-4f52-5a11-868e-ddef2c04f4d8": 1,
 }
 FAILSAFE = {
+    "ce6a92e4-5c2f-5681-9742-c80a4447bbdf": 15,
     "08a7a60f-6956-5a9e-9983-5603c3ac5a38": 7,
     "2ff25e81-4586-5ec8-b892-3a6f342693d7": 7,
     "ac059e33-eb27-541c-b9a9-24b214036475": 6,
@@ -1921,71 +1922,6 @@ async def _perform_autoscale_impl(
                         f"total_rev/hr=${total_rev:.4f})"
                     )
 
-    # Log revenue table for public TEE vLLM chutes, sorted by revenue.
-    tee_rev_chutes = sorted(
-        [
-            ctx
-            for ctx in contexts.values()
-            if ctx.standard_template == "vllm" and ctx.tee and ctx.public and ctx.current_count > 0
-        ],
-        key=lambda c: c.hourly_revenue_total,
-        reverse=True,
-    )
-    if tee_rev_chutes:
-        table = Table(title="TEE Revenue Report", show_lines=False)
-        table.add_column("Chute", style="cyan", no_wrap=True)
-        table.add_column("Total/Hr", justify="right")
-        table.add_column("Rev/Inst", justify="right")
-        table.add_column("Rev/GPU", justify="right")
-        table.add_column("Util", justify="right")
-        table.add_column("@100% Inst", justify="right")
-        table.add_column("@100% GPU", justify="right")
-        table.add_column("GPUs", justify="right")
-        table.add_column("Inst", justify="right")
-        table.add_column("Avg Inst", justify="right")
-        table.add_column("Prof", justify="center")
-        table.add_column("Factor", justify="right")
-        for ctx in tee_rev_chutes:
-            gpus = ctx.gpu_count or 1
-            rev_per_gpu = ctx.hourly_revenue_per_instance / max(gpus, 1)
-            util = ctx.utilization_2h
-            theoretical_rev = ctx.hourly_revenue_per_instance / max(util, 0.01) if util > 0 else 0.0
-            theoretical_per_gpu = theoretical_rev / max(gpus, 1)
-            name = ctx.info.name if ctx.info else ctx.chute_id
-            est_cost = ctx.hourly_cost * ESTIMATED_COST_RATIO
-            # Color revenue: green if profitable, yellow if @100% would be profitable, red otherwise
-            if ctx.hourly_revenue_per_instance >= est_cost:
-                rev_style = "bold green"
-            elif theoretical_rev >= est_cost:
-                rev_style = "yellow"
-            else:
-                rev_style = "bold red"
-            # Color util: green <50%, yellow 50-85%, red >85%
-            if util < 0.5:
-                util_style = "green"
-            elif util < 0.85:
-                util_style = "yellow"
-            else:
-                util_style = "red"
-            prof_str = "[bold green]Y[/]" if ctx.profitable else "[bold red]N[/]"
-            table.add_row(
-                name,
-                f"[{rev_style}]{ctx.hourly_revenue_total:.2f}[/]",
-                f"[{rev_style}]{ctx.hourly_revenue_per_instance:.2f}[/]",
-                f"[{rev_style}]{rev_per_gpu:.2f}[/]",
-                f"[{util_style}]{util:.1%}[/]",
-                f"[{rev_style}]{theoretical_rev:.2f}[/]",
-                f"[{rev_style}]{theoretical_per_gpu:.2f}[/]",
-                str(gpus),
-                str(ctx.current_count),
-                f"{ctx.avg_instances_2h:.1f}",
-                prof_str,
-                f"{ctx.revenue_factor:.2f}",
-            )
-        console = Console(file=StringIO(), force_terminal=True, width=160)
-        console.print(table)
-        logger.info("\n" + console.file.getvalue())
-
     # If any starving chutes exist, block non-starving scale-ups that are GPU-compatible.
     if starving_chutes:
         for ctx in contexts.values():
@@ -2325,6 +2261,80 @@ async def _perform_autoscale_impl(
 
         ctx.effective_multiplier = total
         ctx.cm_delta_ratio = total / base_mult if base_mult > 0 else 1.0
+
+    # Log revenue table for public TEE vLLM chutes, sorted by total revenue.
+    tee_rev_chutes = sorted(
+        [
+            ctx
+            for ctx in contexts.values()
+            if ctx.standard_template == "vllm" and ctx.tee and ctx.public and ctx.current_count > 0
+        ],
+        key=lambda c: c.hourly_revenue_total,
+        reverse=True,
+    )
+    if tee_rev_chutes:
+        table = Table(title="TEE Revenue Report", show_lines=False)
+        table.add_column("Chute", style="cyan", no_wrap=True)
+        table.add_column("Total/Hr", justify="right")
+        table.add_column("Rev/Inst", justify="right")
+        table.add_column("Rev/GPU", justify="right")
+        table.add_column("Util", justify="right")
+        table.add_column("@100% Inst", justify="right")
+        table.add_column("@100% GPU", justify="right")
+        table.add_column("GPUs", justify="right")
+        table.add_column("Inst", justify="right")
+        table.add_column("Avg Inst", justify="right")
+        table.add_column("Boost", justify="right")
+        table.add_column("Eff Mult", justify="right")
+        table.add_column("Prof", justify="center")
+        for ctx in tee_rev_chutes:
+            gpus = ctx.gpu_count or 1
+            rev_per_gpu = ctx.hourly_revenue_per_instance / max(gpus, 1)
+            util = ctx.utilization_2h
+            theoretical_rev = ctx.hourly_revenue_per_instance / max(util, 0.01) if util > 0 else 0.0
+            theoretical_per_gpu = theoretical_rev / max(gpus, 1)
+            name = ctx.info.name if ctx.info else ctx.chute_id
+            est_cost = ctx.hourly_cost * ESTIMATED_COST_RATIO
+            # Color revenue: green if profitable, yellow if @100% would be profitable, red otherwise
+            if ctx.hourly_revenue_per_instance >= est_cost:
+                rev_style = "bold green"
+            elif theoretical_rev >= est_cost:
+                rev_style = "yellow"
+            else:
+                rev_style = "bold red"
+            # Color util: green <50%, yellow 50-85%, red >85%
+            if util < 0.5:
+                util_style = "green"
+            elif util < 0.85:
+                util_style = "yellow"
+            else:
+                util_style = "red"
+            # Color boost: green if high, yellow if moderate, dim if 1.0
+            if ctx.boost >= 1.5:
+                boost_style = "bold green"
+            elif ctx.boost >= 1.1:
+                boost_style = "yellow"
+            else:
+                boost_style = "dim"
+            prof_str = "[bold green]Y[/]" if ctx.profitable else "[bold red]N[/]"
+            table.add_row(
+                name,
+                f"[{rev_style}]{ctx.hourly_revenue_total:.2f}[/]",
+                f"[{rev_style}]{ctx.hourly_revenue_per_instance:.2f}[/]",
+                f"[{rev_style}]{rev_per_gpu:.2f}[/]",
+                f"[{util_style}]{util:.1%}[/]",
+                f"[{rev_style}]{theoretical_rev:.2f}[/]",
+                f"[{rev_style}]{theoretical_per_gpu:.2f}[/]",
+                str(gpus),
+                str(ctx.current_count),
+                f"{ctx.avg_instances_2h:.1f}",
+                f"[{boost_style}]{ctx.boost:.2f}[/]",
+                f"[{boost_style}]{ctx.effective_multiplier:.1f}[/]",
+                prof_str,
+            )
+        console = Console(file=StringIO(), force_terminal=True, width=200)
+        console.print(table)
+        logger.info("\n" + console.file.getvalue())
 
     # Kinda hacky, because it's not actually creating bounties, but we'll
     # send bounty notifications for miners to have instant feedback when
