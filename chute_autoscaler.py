@@ -327,7 +327,6 @@ class AutoScaleContext:
         self.is_donor = False
         self.is_critical_donor = False
         self.blocked_by_starving = False
-        self.blocked_by_tee_limit = False
         self.downscale_amount = 0
         self.upscale_amount = 0
         self.preferred_downscale_gpus = set()
@@ -342,6 +341,7 @@ class AutoScaleContext:
         # Total revenue from Prometheus, divided by time-weighted avg instance count from DB
         rev_total = metrics.get("revenue_total", {})
         avg_inst = avg_instance_counts or {}
+        self.avg_instances_2h = avg_inst.get("2h", 0.0)
         rev_30m = rev_total.get("30m", 0.0) / max(avg_inst.get("30m", 0.0), 1.0)
         rev_1h = rev_total.get("1h", 0.0) / max(avg_inst.get("1h", 0.0), 1.0)
         rev_2h = rev_total.get("2h", 0.0) / max(avg_inst.get("2h", 0.0), 1.0)
@@ -357,6 +357,8 @@ class AutoScaleContext:
             self.hourly_cost = 0.0
         # Hourly revenue per instance (2h total revenue / avg instances, scaled to hourly)
         self.hourly_revenue_per_instance = rev_2h / 2.0  # 2h window / 2 = hourly rate
+        # Total hourly revenue (raw from Prometheus, not multiplied back up)
+        self.hourly_revenue_total = rev_total.get("2h", 0.0) / 2.0
         self.profitable = True  # default, computed in second pass
 
 
@@ -1831,6 +1833,7 @@ async def _perform_autoscale_impl(
         ]
     )
     has_revenue_data = len(nonzero_revs) >= 3
+    median_rev_per_inst = 0.0
 
     if has_revenue_data:
         mid = len(nonzero_revs) // 2
@@ -1925,12 +1928,13 @@ async def _perform_autoscale_impl(
             for ctx in contexts.values()
             if ctx.standard_template == "vllm" and ctx.tee and ctx.public and ctx.current_count > 0
         ],
-        key=lambda c: c.hourly_revenue_per_instance,
+        key=lambda c: c.hourly_revenue_total,
         reverse=True,
     )
     if tee_rev_chutes:
         table = Table(title="TEE Revenue Report", show_lines=False)
         table.add_column("Chute", style="cyan", no_wrap=True)
+        table.add_column("Total/Hr", justify="right")
         table.add_column("Rev/Inst", justify="right")
         table.add_column("Rev/GPU", justify="right")
         table.add_column("Util", justify="right")
@@ -1938,6 +1942,7 @@ async def _perform_autoscale_impl(
         table.add_column("@100% GPU", justify="right")
         table.add_column("GPUs", justify="right")
         table.add_column("Inst", justify="right")
+        table.add_column("Avg Inst", justify="right")
         table.add_column("Prof", justify="center")
         table.add_column("Factor", justify="right")
         for ctx in tee_rev_chutes:
@@ -1965,6 +1970,7 @@ async def _perform_autoscale_impl(
             prof_str = "[bold green]Y[/]" if ctx.profitable else "[bold red]N[/]"
             table.add_row(
                 name,
+                f"[{rev_style}]{ctx.hourly_revenue_total:.2f}[/]",
                 f"[{rev_style}]{ctx.hourly_revenue_per_instance:.2f}[/]",
                 f"[{rev_style}]{rev_per_gpu:.2f}[/]",
                 f"[{util_style}]{util:.1%}[/]",
@@ -1972,40 +1978,13 @@ async def _perform_autoscale_impl(
                 f"[{rev_style}]{theoretical_per_gpu:.2f}[/]",
                 str(gpus),
                 str(ctx.current_count),
+                f"{ctx.avg_instances_2h:.1f}",
                 prof_str,
                 f"{ctx.revenue_factor:.2f}",
             )
         console = Console(file=StringIO(), force_terminal=True, width=160)
         console.print(table)
         logger.info("\n" + console.file.getvalue())
-
-    # TEE capacity limit: only apply when there's actual contention — more chutes want to
-    # scale up than we can accommodate. If the top profitable chutes don't need scaling,
-    # don't waste their slots blocking others.
-    MAX_TEE_SCALING = 6
-    tee_wants_scaleup = [
-        ctx
-        for ctx in contexts.values()
-        if ctx.tee
-        and ctx.public
-        and (ctx.is_starving or ctx.utilization_basis >= ctx.threshold or ctx.current_count == 0)
-        and ctx.current_count > 0
-    ]
-    if len(tee_wants_scaleup) > MAX_TEE_SCALING:
-        # Sort by hourly revenue per instance descending; zero-revenue goes last
-        tee_wants_scaleup.sort(key=lambda c: c.hourly_revenue_per_instance, reverse=True)
-        blocked_tee = tee_wants_scaleup[MAX_TEE_SCALING:]
-        for ctx in blocked_tee:
-            ctx.blocked_by_tee_limit = True
-            logger.info(
-                f"TEE scale-up blocked: {ctx.chute_id} not in top {MAX_TEE_SCALING} by revenue "
-                f"(rev/hr=${ctx.hourly_revenue_per_instance:.4f})"
-            )
-    elif len(tee_wants_scaleup) > 0:
-        logger.info(
-            f"TEE scaling: {len(tee_wants_scaleup)} chutes want scale-up, "
-            f"under limit of {MAX_TEE_SCALING} — no blocking needed"
-        )
 
     # If any starving chutes exist, block non-starving scale-ups that are GPU-compatible.
     if starving_chutes:
@@ -2210,6 +2189,14 @@ async def _perform_autoscale_impl(
     URGENCY_BOOST_MAX = 1.5
     RELATIVE_ADJUSTMENT_MAX = 0.2  # ±20% adjustment based on relative urgency
 
+    # Revenue boost: additive bonus based on per-instance revenue vs median
+    # Active demand tier: applied when upscale_amount > 0
+    REVENUE_BOOST_SCALE = 0.15  # Per 1x median: 1x median = +0.15, 2x = +0.30
+    REVENUE_BOOST_MAX = 0.5  # Cap the active revenue bonus
+    # Retention tier: small bonus to keep miners on revenue-generating chutes even without demand pressure
+    REVENUE_RETAIN_SCALE = 0.05  # Per 1x median: 1x = +0.05, 2x = +0.10
+    REVENUE_RETAIN_MAX = 0.15  # Cap the retention bonus
+
     # Collect SMOOTHED urgency scores for chutes wanting to scale up
     # Using smoothed values prevents boost from oscillating between runs
     scaling_chutes = [ctx for ctx in contexts.values() if ctx.upscale_amount > 0]
@@ -2265,8 +2252,32 @@ async def _perform_autoscale_impl(
             adjusted_boost = base_boost * relative_factor
             # Scale the boost bonus (amount above 1.0) by sustainability
             ctx.boost = max(1.0, 1.0 + (adjusted_boost - 1.0) * sustainability)
+
+            # Revenue bonus: reward chutes generating more revenue per instance
+            # Only for public vLLM chutes with revenue data
+            if (
+                has_revenue_data
+                and median_rev_per_inst > 0
+                and ctx.hourly_revenue_per_instance > 0
+                and ctx.public
+                and ctx.standard_template == "vllm"
+            ):
+                revenue_ratio = ctx.hourly_revenue_per_instance / median_rev_per_inst
+                revenue_bonus = min(revenue_ratio * REVENUE_BOOST_SCALE, REVENUE_BOOST_MAX)
+                ctx.boost += revenue_bonus
         else:
-            ctx.boost = 1.0
+            # No scaling needed — small revenue retention signal to keep miners on profitable chutes
+            if (
+                has_revenue_data
+                and median_rev_per_inst > 0
+                and ctx.hourly_revenue_per_instance > 0
+                and ctx.public
+                and ctx.standard_template == "vllm"
+            ):
+                revenue_ratio = ctx.hourly_revenue_per_instance / median_rev_per_inst
+                ctx.boost = 1.0 + min(revenue_ratio * REVENUE_RETAIN_SCALE, REVENUE_RETAIN_MAX)
+            else:
+                ctx.boost = 1.0
 
     # Calculate effective compute multiplier for each chute (for CSV export and logging)
     # This mirrors the logic in api/chute/util.py:calculate_effective_compute_multiplier
@@ -2793,17 +2804,6 @@ async def calculate_local_decision(ctx: AutoScaleContext):
         ctx.target_count = 0
         ctx.action = "no_action"
         logger.info(f"Chute {ctx.chute_id} is disabled, target_count set to 0.")
-        return
-
-    # TEE capacity limit: blocked chutes maintain current count, no scale-up
-    if ctx.blocked_by_tee_limit:
-        failsafe_min = FAILSAFE.get(ctx.chute_id, UNDERUTILIZED_CAP)
-        ctx.target_count = max(failsafe_min, ctx.current_count)
-        ctx.action = "no_action"
-        logger.info(
-            f"Scale up blocked: {ctx.chute_id} - TEE chute not in top by revenue "
-            f"(rev/hr=${ctx.hourly_revenue_per_instance:.4f})"
-        )
         return
 
     # Private Chutes logic
