@@ -50,6 +50,7 @@ from api.chute.util import (
     get_manual_boosts,
     invalidate_chute_cache,
     update_usage_data,
+    get_chute_by_id_or_name,
 )
 from api.server.service import get_chute_instances_evidence
 from api.server.schemas import TeeChuteEvidence
@@ -1118,7 +1119,7 @@ async def get_chute_code(
     """
     Load a chute's code by ID or name.
     """
-    chute = await get_one(chute_id)
+    chute = await get_chute_by_id_or_name(chute_id, db, current_user)
     if not chute:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
